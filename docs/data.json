@@ -743,6 +743,12 @@
           "synopsis": "/must-gather:analyze [must-gather-path] [component]"
         },
         {
+          "argument_hint": "[must-gather-path] [output-path] [--config config-file | --discover]",
+          "description": "Obfuscate sensitive data in must-gather artifacts using must-gather-clean",
+          "name": "obfuscate",
+          "synopsis": "/must-gather:obfuscate [must-gather-path] [output-path] [--config config-file | --discover]"
+        },
+        {
           "argument_hint": "[must-gather-path]",
           "description": "Analyze OVN databases from a must-gather using ovsdb-tool",
           "name": "ovn-dbs",
@@ -758,6 +764,11 @@
           "description": "|",
           "id": "must-gather-analyzer",
           "name": "Must-Gather Analyzer"
+        },
+        {
+          "description": "Local analysis of must-gather artifacts to generate intelligent obfuscation configuration",
+          "id": "must-gather-obfuscate",
+          "name": "Must-Gather Config Discovery"
         }
       ],
       "version": "0.0.1"
