@@ -10,6 +10,7 @@ Comprehensive Jira integration for Claude Code, providing AI-powered tools to an
 - 🧪 **Test Generation** - Generate comprehensive test steps for JIRA issues by analyzing related PRs
 - ✨ **Issue Creation** - Create well-formed stories, epics, features, tasks, bugs, and feature requests with guided workflows
 - 📝 **Release Note Generation** - Automatically generate bug fix release notes from Jira and linked GitHub PRs
+- 📋 **RFE Analysis** - Analyze RFEs and generate EPIC, user stories, and outcomes breakdown
 - 🤖 **Automated Workflows** - From issue analysis to PR creation, fully automated
 - 💬 **Smart Comment Analysis** - Extracts blockers, risks, and key insights from comments
 
@@ -237,6 +238,31 @@ Updated: https://issues.redhat.com/browse/OCPBUGS-38358
 ```
 
 See [commands/create-release-note.md](commands/create-release-note.md) for full documentation.
+
+---
+
+### `/jira:analyze-rfe` - Analyze RFE and Generate EPIC/Story Breakdown
+
+Analyze a Request for Enhancement (RFE) from Jira and generate a structured breakdown of Epics, user stories, and their outcomes. This helps transform customer-driven RFEs into actionable implementation plans for sprint and release planning.
+
+**Usage:**
+```bash
+/jira:analyze-rfe RFE-1234
+
+# Or with full URL
+/jira:analyze-rfe https://issues.redhat.com/browse/RFE-1234
+```
+
+**What it does:**
+1. Fetches the RFE from Jira
+2. Parses nature, description, business requirements, affected components
+3. Generates EPIC(s) with scope and acceptance criteria
+4. Generates user stories in "As a... I want... So that..." format
+5. Defines outcomes for each story (customer/business value)
+
+**Output:** Structured markdown report with epics, stories, and outcomes. Use `/jira:create` to create the generated epics and stories in Jira.
+
+See [commands/analyze-rfe.md](commands/analyze-rfe.md) for full documentation.
 
 ---
 

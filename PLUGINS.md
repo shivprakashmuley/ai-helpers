@@ -154,6 +154,7 @@ See [plugins/hello-world/README.md](plugins/hello-world/README.md) for detailed 
 A plugin to automate tasks with Jira
 
 **Commands:**
+- **`/jira:analyze-rfe` `<rfe-key>`** - Analyze an RFE and output meaningful EPIC, user stories, and their outcomes
 - **`/jira:backlog` `[project-key] [--assignee username] [--days-inactive N]`** - Find suitable JIRA tickets from the backlog to work on based on priority and activity
 - **`/jira:create-release-note` `<issue-key>`** - Generate bug fix release notes from Jira tickets and linked GitHub PRs
 - **`/jira:create` `<type> [project-key] <summary> [--component <name>] [--version <version>] [--parent <key>]`** - Create Jira issues (story, epic, feature, task, bug, feature-request) with proper formatting
