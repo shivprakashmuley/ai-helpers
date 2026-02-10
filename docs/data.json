@@ -85,6 +85,12 @@
     {
       "commands": [
         {
+          "argument_hint": "<rfe-key>",
+          "description": "Analyze an RFE and output meaningful EPIC, user stories, and their outcomes",
+          "name": "analyze-rfe",
+          "synopsis": "/jira:analyze-rfe <rfe-key>"
+        },
+        {
           "argument_hint": "[project-key] [--assignee username] [--days-inactive N]",
           "description": "Find suitable JIRA tickets from the backlog to work on based on priority and activity",
           "name": "backlog",
@@ -144,6 +150,11 @@
       "hooks": [],
       "name": "jira",
       "skills": [
+        {
+          "description": "Implementation guide for analyzing RFEs and generating EPIC, user stories, and outcomes breakdown",
+          "id": "analyze-rfe",
+          "name": "Analyze RFE"
+        },
         {
           "description": "Jira conventions for the CNTRLPLANE project used by OpenShift teams",
           "id": "cntrlplane",
