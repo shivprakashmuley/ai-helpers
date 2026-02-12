@@ -174,6 +174,17 @@ RFEs typically contain these sections (Jira Wiki markup):
 
 **When to Execute**: Always attempt this step for affected components. If repositories cannot be found or GitHub API is unavailable, gracefully degrade and proceed with available information.
 
+**Upstream Analysis**: When an upstream repository is discovered, ask the user if upstream analysis is needed. This is particularly valuable for:
+- **Upstream adoption RFEs**: Features being adopted from upstream projects
+- **Cross-project alignment**: Understanding differences between upstream and downstream
+- **Feature parity**: Identifying upstream capabilities not yet in OpenShift
+- **Design validation**: Comparing OpenShift-specific approaches with upstream decisions
+
+Skip upstream analysis for:
+- **OpenShift-only features**: No upstream equivalent
+- **Quick analysis**: Time-constrained situations
+- **Known divergence**: Component has intentionally diverged from upstream
+
 **Actions**:
 
 #### 2.7.1: Discover Repositories
@@ -428,9 +439,89 @@ For each affected component:
    - Avoid: {pitfalls from lessons learned}
    ```
 
-#### 2.7.6: Integration with Epic/Story Generation
+#### 2.7.6: Upstream Repository Analysis (Conditional)
 
-**Use comprehensive context when generating epics and stories**:
+**Objective**: When upstream repository exists, optionally analyze it for comparative insights.
+
+**When to Execute**:
+- **Always ask the user** if upstream analysis should be performed when an upstream repo is discovered
+- Recommend "Yes" for: Upstream adoption RFEs, feature parity analysis, cross-project alignment
+- Recommend "No" for: OpenShift-only features, time-constrained analysis, known divergence
+
+**Actions**:
+
+1. **Prompt the user**:
+   ```
+   Upstream Repository Found for {component}
+   Upstream: {org}/{repo}
+
+   Upstream analysis includes:
+   - Codebase structure and architecture
+   - Historical PR analysis and design decisions
+   - Architecture Decision Records (ADRs)
+
+   This is useful for:
+   - Understanding original design intent
+   - Finding upstream features to adopt
+   - Identifying differences between upstream/downstream
+
+   Analyze upstream repository? [y/N]:
+   ```
+
+2. **If user approves**, perform upstream analysis:
+   - **Structure analysis**: Same as downstream (architecture, CRDs, packages)
+   - **PR search**: Use same keywords, find relevant upstream PRs
+   - **Deep-dive top PRs**: Extract design decisions, rationale
+   - **Search upstream ADRs**: Find architecture documentation
+
+3. **Generate comparative insights**:
+   ```markdown
+   **Upstream Analysis**:
+   *Analysis of upstream repository: {org}/{repo}*
+
+   **Architecture Comparison**:
+   - Downstream: Kubernetes Operator
+   - Upstream: CLI Tool
+   - *Note: Different architectures indicate OpenShift-specific adaptation*
+
+   **Upstream Implementation Patterns**:
+   - Upstream PR #123: Original feature implementation
+     - Pattern: Controller-based reconciliation with event watching
+
+   **Upstream Architecture Decisions**:
+   - ADR-005-storage-backend: Decision to use etcd directly
+
+   **Upstream Adoption Considerations**:
+   - Upstream has 7 CRDs vs downstream 5 - consider adopting additional APIs
+   - Review upstream PRs for proven implementation patterns
+   - Consider contributing OpenShift enhancements back to upstream
+   ```
+
+4. **Integration with recommendations**:
+   - Reference upstream PRs in "Recommended Approach"
+   - Note architectural differences and their rationale
+   - Identify opportunities for upstream contribution
+   - Flag significant divergence as risk factor
+
+**CLI Usage**:
+```bash
+# Always analyze upstream
+./gather_component_context.py cert-manager --keywords "cert" --analyze-upstream
+
+# Never analyze upstream
+./gather_component_context.py cert-manager --keywords "cert" --skip-upstream
+
+# Non-interactive mode (skips upstream by default)
+./gather_component_context.py cert-manager --keywords "cert" --no-interactive
+```
+
+**Performance Impact**:
+- Adds ~15-30 seconds per component
+- Additional GitHub API calls (~20-30 requests)
+
+#### 2.7.7: Integration with Epic/Story Generation
+
+**Use comprehensive context (including upstream analysis if available) when generating epics and stories**:
 
 1. **In Epic scope definition** (Step 3):
    - Reference architecture patterns identified
