@@ -15,9 +15,40 @@ This skill is automatically invoked by the `/jira:analyze-rfe` command and shoul
 
 ## Prerequisites
 
-- **MCP Jira server configured** (required - see `plugins/jira/README.md`)
-- Read access to the RFE project
-- User provides an RFE key (e.g., RFE-1234) or Jira URL
+### Required Environment Setup
+
+Before running this skill, the user must have:
+
+1. **Jira Personal Access Token** configured:
+   ```bash
+   export JIRA_PERSONAL_TOKEN="your_token_here"
+   export JIRA_URL="https://issues.redhat.com"  # Optional
+   ```
+
+   Get token from: https://issues.redhat.com/secure/ViewProfile.jspa?selectedTab=com.atlassian.pats.pats-plugin:jira-user-personal-access-tokens
+
+2. **Python Dependencies** installed:
+   ```bash
+   pip install requests aiohttp
+   ```
+
+3. **Jira Permissions**:
+   - Read access to RFE project
+   - Read access to OCPBUGS project (for related work)
+   - Read access to component-specific projects
+
+4. **User Input**:
+   - RFE key (e.g., RFE-1234) or Jira URL
+
+### Verification
+
+Test the setup with:
+```bash
+curl -H "Authorization: Bearer $JIRA_PERSONAL_TOKEN" \
+     "https://issues.redhat.com/rest/api/2/myself"
+```
+
+If this returns your user profile, you're ready to run analyze-rfe.
 
 ## RFE Structure Reference
 
@@ -43,14 +74,39 @@ RFEs typically contain these sections (Jira Wiki markup):
    - If key provided directly (e.g., `RFE-1234`), use as-is
    - Validate format: `RFE-\d+` or `[A-Z]+-\d+` (accept non-RFE project for flexibility)
 
-2. **Fetch issue** via MCP:
+2. **Fetch issue** via Jira REST API:
+   ```bash
+   GET /rest/api/2/issue/{issue-key}?fields=summary,description,components,labels,status,created,updated,reporter,assignee,issuelinks,customfield_*
    ```
-   mcp__atlassian__jira_get_issue(issue_key=<rfe-key>, fields="*all")
+
+   Use the Jira REST client (see `plugins/jira/skills/analyze-rfe/scripts/fetch_rfe.py`):
+   ```python
+   import os
+   import requests
+
+   jira_url = os.getenv("JIRA_URL", "https://issues.redhat.com")
+   token = os.getenv("JIRA_PERSONAL_TOKEN")
+
+   response = requests.get(
+       f"{jira_url}/rest/api/2/issue/{issue_key}",
+       headers={
+           "Authorization": f"Bearer {token}",
+           "Accept": "application/json"
+       },
+       params={
+           "fields": "summary,description,components,labels,status,created,updated,reporter,assignee,issuelinks,customfield_12316840,customfield_12319940"
+       },
+       timeout=30
+   )
+
+   rfe_data = response.json()
    ```
 
 3. **Handle errors**:
-   - If 404/403: Display error, suggest verifying key and permissions
-   - If MCP unavailable: Point to Jira plugin README for setup
+   - If 401: Display "Authentication failed. Check JIRA_PERSONAL_TOKEN environment variable"
+   - If 404: Display "Issue {issue_key} not found. Verify the key and your permissions"
+   - If 403: Display "Access denied. You need read permission for the RFE project"
+   - If JIRA_PERSONAL_TOKEN not set: Display setup instructions
 
 4. **Display progress**: Show RFE title and link
 
@@ -540,72 +596,36 @@ As a <role>, I want to <action>, so that <value>.
    - Specific and actionable
    - Right-sized (one sprint)
 
-### Step 4.5: Add Non-Functional Requirement (NFR) Stories
-
-**Objective**: Ensure production-readiness by identifying NFR stories.
-
-**Actions**:
-
-1. **Analyze performance requirements**:
-   - Latency targets (API response times, UI render times)
-   - Throughput expectations (requests/sec, events/sec)
-   - Resource constraints (CPU, memory, storage limits)
-   - Add story if needed: "As an SRE, I want performance SLOs defined and monitored..."
-
-2. **Analyze security requirements**:
-   - Authentication/authorization changes
-   - Data encryption (at rest, in transit)
-   - Compliance requirements (GDPR, SOC2, HIPAA)
-   - Audit logging needs
-   - Add story if needed: "As a security admin, I want audit logs for all configuration changes..."
-
-3. **Analyze scalability requirements**:
-   - Expected load growth
-   - Horizontal/vertical scaling capabilities
-   - Database sharding or partitioning needs
-   - Add story if needed: "As a platform engineer, I want auto-scaling based on load metrics..."
-
-4. **Analyze observability requirements**:
-   - Metrics to expose (Prometheus, custom metrics)
-   - Logging requirements (structured logs, log levels)
-   - Alerting rules (SLO violations, error rates)
-   - Dashboards (Grafana, custom UI)
-   - Add story if needed: "As an SRE, I want Grafana dashboards for key performance metrics..."
-
-5. **NFR story format**:
-   - Use same user story format
-   - Typical personas: SRE, Security Admin, Platform Engineer, Operator
-   - Make acceptance criteria measurable (e.g., "p95 latency < 200ms")
-
-6. **Add NFR stories to epic**: Group NFR stories at the end of each epic's story list
-
-### Step 4.6: Estimate Story Effort
+### Step 4.5: Estimate Story Effort
 
 **Objective**: Provide t-shirt sizing to support sprint planning.
+
+**Sprint Duration**: 3 weeks per sprint/cycle
 
 **Actions**:
 
 1. **Estimate each story** using these criteria:
    - **Extra Small (XS)**:
-     - 1-2 hours of work
-     - Single file change, minimal testing
-     - Example: Configuration change, simple UI text update
+     - ~1 Sprint (3 weeks) to complete
+     - Single component change, standard testing
+     - Example: Add new API parameter, simple validation logic, configuration change
+     - Note: Consider if this should be a smaller task-sized issue
    - **Small (S)**:
-     - 2-4 hours of work
-     - 1-3 files changed, unit tests
-     - Example: Add new API parameter, simple validation logic
-   - **Medium (M)**:
-     - 1-2 days of work
-     - 3-10 files changed, unit + integration tests
+     - ~2 Sprints (6 weeks) to complete
+     - 1-2 components affected, unit + integration tests
      - Example: New API endpoint, UI component with state management
+   - **Medium (M)**:
+     - ~3 Sprints (9 weeks) to complete
+     - Multiple components, cross-team coordination, complex testing
+     - Example: New service integration, complex business logic with dependencies
    - **Large (L)**:
-     - 3-5 days of work
-     - 10+ files, complex testing, possible data migration
-     - Example: New service integration, complex business logic
+     - ~4 Sprints (12 weeks) to complete
+     - Significant cross-component changes, extensive testing, possible data migration
+     - Example: Major feature addition requiring API changes and UI overhaul
    - **Extra Large (XL)**:
-     - > 1 week of work
-     - Many files, cross-component changes, extensive testing
-     - **Flag for splitting**: XL stories should be broken down further
+     - ~5 Sprints (15 weeks) to complete
+     - Many components, cross-team dependencies, architectural changes
+     - **Flag for splitting**: XL stories should be broken down or elevated to Feature/Initiative level
 
 2. **Consider complexity factors**:
    - Number of components/files touched
@@ -627,19 +647,49 @@ As a <role>, I want to <action>, so that <value>.
    - Any story > L should have note: "Consider splitting this story"
    - Suggest potential split points
 
-### Step 4.7: Discover Related Work
+### Step 4.6: Discover Related Work
 
 **Objective**: Find related RFEs, epics, bugs to prevent duplication and leverage existing work.
 
 **Actions**:
 
-1. **Search Jira for related issues**:
-   - Use MCP `jira_search` with keywords from RFE title and affected components
-   - Search for:
-     - Related RFEs: `project = RFE AND text ~ "<keyword>"`
-     - Related epics: `issuetype = Epic AND text ~ "<keyword>"`
-     - Related bugs: `issuetype = Bug AND status != Closed AND text ~ "<keyword>"`
-     - Same component: `component = "<component-name>" AND created >= -6M`
+1. **Search Jira for related issues** using REST API:
+   ```bash
+   POST /rest/api/2/search
+   Content-Type: application/json
+
+   {
+     "jql": "project = RFE AND text ~ \"<keyword>\" AND created >= -12M",
+     "fields": ["key", "summary", "status", "created", "components"],
+     "maxResults": 20
+   }
+   ```
+
+   Run multiple searches (can be parallelized for performance):
+   - **Related RFEs**: `project = RFE AND text ~ "<keyword>" AND created >= -12M AND key != {current-rfe}`
+   - **Related Epics**: `issuetype = Epic AND component = "<component-name>" AND status IN ("In Progress", "To Do", "New")`
+   - **Related Bugs**: `project = OCPBUGS AND component = "<component-name>" AND created >= -6M AND text ~ "<keyword>"`
+   - **Same Component**: `component = "<component-name>" AND created >= -6M AND issuetype IN (Epic, Story, Feature)`
+   - **Keyword Search**: `text ~ "<keyword1>" OR text ~ "<keyword2>" OR text ~ "<keyword3>"`
+
+   Example Python code:
+   ```python
+   def search_jira(jql, fields=None, max_results=20):
+       response = requests.post(
+           f"{jira_url}/rest/api/2/search",
+           headers={
+               "Authorization": f"Bearer {token}",
+               "Content-Type": "application/json"
+           },
+           json={
+               "jql": jql,
+               "fields": fields or ["key", "summary", "status"],
+               "maxResults": max_results
+           },
+           timeout=30
+       )
+       return response.json()
+   ```
 
 2. **Analyze related issues** (limit to 5-10 most relevant):
    - Duplicate work? (exact same capability requested)
@@ -830,30 +880,21 @@ As a <role>, I want to <action>, so that <value>.
 - Test that [criteria 1]
 - Verify that [criteria 2]
 **Outcome**: [What value this delivers]
-**Effort**: S/M/L (estimate)
+**Effort**: S (~2 sprints / 6 weeks)
 **Confidence**: High/Medium/Low
 **Depends On**: [Story ID if applicable, or "None"]
 
 ### Epic 1 → Story 1.2: [Concise Title]
 ...
 
-### Epic 1 → Story 1.N: [NFR Title - Performance]
-**User Story**: As an SRE, I want [capability], so that [operational value].
-**Acceptance Criteria**:
-- [Measurable criteria: e.g., p95 latency < 200ms]
-**Outcome**: [What value this delivers]
-**Effort**: M (estimate)
-**Confidence**: Medium
-**Depends On**: Story 1.1, Story 1.2
-
 ---
 
 ## Implementation Summary
 
 ### Effort Overview
-| Epic | Stories | Total Effort (story points estimated) |
-|------|---------|---------------------------------------|
-| Epic 1 | 5 stories (3 feature + 2 NFR) | ~15-20 days (3-4 sprints) |
+| Epic | Stories | Total Effort |
+|------|---------|--------------|
+| Epic 1 | 5 stories | ~10-12 sprints (30-36 weeks) |
 
 ### Critical Dependencies
 - [List of blocking items across epics]
@@ -867,9 +908,8 @@ As a <role>, I want to <action>, so that <value>.
 ## Outcomes Summary
 | Story | Outcome | Effort |
 |-------|---------|--------|
-| 1.1 | [Outcome] | S |
-| 1.2 | [Outcome] | M |
-| 1.N (NFR) | [Operational outcome] | M |
+| 1.1 | [Outcome] | S (~2 sprints) |
+| 1.2 | [Outcome] | M (~3 sprints) |
 
 ---
 *Generated by `/jira:analyze-rfe` on [timestamp]*
@@ -883,9 +923,63 @@ As a <role>, I want to <action>, so that <value>.
 
 ## Error Handling
 
-**Issue Not Found** (404, 403):
-- Display error with verification steps
-- Suggest: Check issue key, Jira permissions, MCP configuration
+**Authentication Failed** (401):
+```
+Error: Authentication failed (HTTP 401)
+
+Required Setup:
+1. Get Jira Personal Access Token:
+   https://issues.redhat.com/secure/ViewProfile.jspa?selectedTab=com.atlassian.pats.pats-plugin:jira-user-personal-access-tokens
+
+2. Set environment variable:
+   export JIRA_PERSONAL_TOKEN="your_token_here"
+
+3. Verify it works:
+   curl -H "Authorization: Bearer $JIRA_PERSONAL_TOKEN" \
+        "https://issues.redhat.com/rest/api/2/myself"
+```
+
+**Issue Not Found** (404):
+```
+Error: Issue {issue-key} not found (HTTP 404)
+
+Verification Steps:
+1. Check the issue key is correct (e.g., RFE-1234, not rfe-1234)
+2. Verify you have read permissions for the RFE project
+3. Confirm the issue exists: https://issues.redhat.com/browse/{issue-key}
+```
+
+**Access Denied** (403):
+```
+Error: Access denied (HTTP 403)
+
+You need read permissions for:
+- RFE project
+- The specific issue's component
+- Related projects (OCPBUGS, OCPSTRAT for related work discovery)
+
+Contact your Jira administrator to request access.
+```
+
+**Token Not Configured**:
+```
+Error: JIRA_PERSONAL_TOKEN environment variable not set
+
+Setup Instructions:
+1. Get token: https://issues.redhat.com/secure/ViewProfile.jspa
+2. Export: export JIRA_PERSONAL_TOKEN="your_token"
+3. Restart Claude Code to pick up the new environment variable
+```
+
+**Network/Timeout Errors**:
+```
+Error: Connection timeout or network error
+
+Check:
+1. Network connectivity to Jira
+2. VPN connection (if required)
+3. Firewall rules allowing HTTPS to issues.redhat.com
+```
 
 **Not RFE Project**:
 - Warn: "Issue is not from RFE project. Proceeding with analysis."
@@ -895,8 +989,13 @@ As a <role>, I want to <action>, so that <value>.
 - Note: "RFE has limited detail. Consider enriching with: [suggested sections]"
 - Generate best-effort breakdown from available content
 
-**MCP Unavailable**:
-- Display setup instructions from `plugins/jira/README.md`
+**Missing Dependencies**:
+```
+Error: Required Python library not found
+
+Install dependencies:
+pip install requests aiohttp
+```
 
 ## Best Practices for AI Implementation
 
@@ -906,12 +1005,11 @@ As a <role>, I want to <action>, so that <value>.
 4. **Reference conventions**: Use create-epic and create-story skill formats
 5. **Link to source**: When generating stories, reference which RFE bullet they address
 6. **Be realistic about complexity**: Don't downplay risks or unknowns; flag them explicitly
-7. **Include NFRs proactively**: Don't wait for SRE/security teams to ask; generate NFR stories upfront
-8. **Estimate conservatively**: When in doubt, size larger; teams can adjust down
-9. **Map dependencies explicitly**: Clear dependency graphs prevent planning surprises
-10. **Search thoroughly for related work**: Spend time on Jira search to prevent duplicate effort
-11. **Flag XL stories immediately**: Stories > 1 week should be broken down before planning
-12. **Make risks measurable**: Quantify impact when possible (e.g., "affects 50K clusters", "3 external API integrations")
+7. **Estimate conservatively**: When in doubt, size larger; teams can adjust down
+8. **Map dependencies explicitly**: Clear dependency graphs prevent planning surprises
+9. **Search thoroughly for related work**: Spend time on Jira search to prevent duplicate effort
+10. **Flag XL stories immediately**: Stories > 1 week should be broken down before planning
+11. **Make risks measurable**: Quantify impact when possible (e.g., "affects 50K clusters", "3 external API integrations")
 
 ## Example Workflow
 
@@ -938,27 +1036,23 @@ User runs: /jira:analyze-rfe RFE-5678
 
 5. Generate Stories:
    - Story 1: As cluster admin, I want to upload custom cert during creation...
-     - Effort: L (API changes, validation, tests)
+     - Effort: L (~4 sprints / 12 weeks - API changes, validation, tests)
      - Depends on: None
    - Story 2: As cluster admin, I want to rotate cert without downtime...
-     - Effort: M (reuse logic from RFE-3456)
+     - Effort: M (~3 sprints / 9 weeks - reuse logic from RFE-3456)
      - Depends on: Story 1
    - Story 3: As cluster admin, I want validation before cluster goes active...
-     - Effort: S (validation library integration)
+     - Effort: S (~2 sprints / 6 weeks - validation library integration)
      - Depends on: Story 1
-   - Story 4 (NFR): As an SRE, I want alerts when cert expiry < 30 days...
-     - Effort: S (Prometheus alerts)
-     - Depends on: Story 2
 
 6. Outcomes:
    - Story 1 → Enables compliance-driven deployments
    - Story 2 → Reduces operational risk
    - Story 3 → Prevents misconfiguration
-   - Story 4 → Prevents cert expiration incidents
 
 7. Implementation Summary:
-   - Total effort: ~12-15 days (2-3 sprints)
-   - Critical path: Story 1 blocks Stories 2, 3, 4
+   - Total effort: ~9 sprints (27 weeks)
+   - Critical path: Story 1 blocks Stories 2, 3
    - Key risk: API contract negotiation with consuming teams
 
 8. Output markdown report with all analysis

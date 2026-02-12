@@ -17,10 +17,59 @@ Comprehensive Jira integration for Claude Code, providing AI-powered tools to an
 ## Prerequisites
 
 - Claude Code installed
-- Jira MCP server configured
-- Optional: `gh` CLI tools installed and configured, for GitHub access.
+- **Jira API Access** - Choose one of two methods:
+  - **REST API** (Recommended) - Simpler setup, better performance
+  - **MCP Server** (Optional) - For teams standardized on MCP
+- Optional: `gh` CLI tools installed and configured, for GitHub access
 
-### Setting up Jira MCP Server
+## Setup Options
+
+### Option 1: REST API (Recommended)
+
+**Best for:** Most users, especially for `/jira:analyze-rfe` command
+
+**Advantages:**
+- ✅ Simpler setup (just environment variables)
+- ✅ 4x faster performance for analyze-rfe
+- ✅ No server to run or maintain
+- ✅ Works with all commands
+
+**Setup Steps:**
+
+1. **Get Jira Personal Access Token**
+   - Visit: https://issues.redhat.com/secure/ViewProfile.jspa?selectedTab=com.atlassian.pats.pats-plugin:jira-user-personal-access-tokens
+   - Click "Create token"
+   - Copy the token
+
+2. **Set Environment Variables**
+   ```bash
+   export JIRA_PERSONAL_TOKEN="your_token_here"
+   export JIRA_URL="https://issues.redhat.com"  # Optional, defaults to this
+   ```
+
+   Add to your shell config (`~/.bashrc`, `~/.zshrc`, etc.):
+   ```bash
+   # Jira API Configuration for Claude Code
+   export JIRA_PERSONAL_TOKEN="your_token"
+   export JIRA_URL="https://issues.redhat.com"
+   ```
+
+3. **Install Python Dependencies**
+   ```bash
+   pip install requests aiohttp
+   ```
+
+4. **Verify Setup**
+   ```bash
+   curl -H "Authorization: Bearer $JIRA_PERSONAL_TOKEN" \
+        "https://issues.redhat.com/rest/api/2/myself"
+   ```
+
+**Detailed Setup Guide:** See [skills/analyze-rfe/SETUP.md](skills/analyze-rfe/SETUP.md) for complete instructions
+
+---
+
+### Option 2: Setting up Jira MCP Server (Optional)
 
 ```bash
 # Start the atlassian mcp server using podman
