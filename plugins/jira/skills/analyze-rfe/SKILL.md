@@ -112,6 +112,309 @@ RFEs typically contain these sections (Jira Wiki markup):
 
 6. **Fallback**: If no context.md found or no matches, proceed without workspace context. This is optional enrichment.
 
+### Step 2.7: Comprehensive Component Context
+
+**Objective**: Gather deep understanding of component architecture, implementation patterns, and historical decisions by analyzing repositories, code, and PR history.
+
+**When to Execute**: Always attempt this step for affected components. If repositories cannot be found or GitHub API is unavailable, gracefully degrade and proceed with available information.
+
+**Actions**:
+
+#### 2.7.1: Discover Repositories
+
+For each affected component:
+
+1. **Check workspace context.md for repository hints**:
+   - If context.md exists (from Step 2.5), check for repository URLs
+   - Extract downstream and upstream repo references
+
+2. **Search OpenShift GitHub organization** using gh CLI:
+   ```bash
+   # Check if repo exists (common patterns)
+   gh repo view openshift/{component-name} --json name,url,description
+   gh repo view openshift/{component-name}-operator --json name,url,description
+   gh repo view openshift/cluster-{component-name}-operator --json name,url,description
+   ```
+
+3. **Extract upstream reference** from downstream README:
+   ```bash
+   # Get README to find upstream project
+   gh repo view openshift/{component-name} --json readme
+   # Look for "upstream:", "based on:", or links to upstream projects
+   ```
+
+4. **Search for related components**:
+   ```bash
+   # Find related repos by keyword
+   gh search repos --owner openshift "{component-keyword}" --json name,description,url --limit 10
+   ```
+
+5. **Output repository mapping**:
+   ```yaml
+   Component: {component-name}
+   Repositories:
+     Downstream: openshift/{repo-name}
+     Upstream: {org}/{upstream-repo}
+     Related: [list of related repos]
+   ```
+
+#### 2.7.2: Analyze Codebase Structure
+
+**For downstream repository** (prioritize this over upstream):
+
+1. **Detect architecture pattern**:
+   - Check for `config/crd/` → Kubernetes Operator
+   - Check for `cmd/` + `main.go` → CLI tool / Binary
+   - Check for `pkg/` only → Library
+   - Check `Dockerfile` → Containerized service
+   - Check `go.mod` for `operator-sdk` → Operator SDK based
+
+2. **Map key packages** (for Go projects):
+   ```bash
+   # Use gh API to browse repository structure
+   gh api repos/openshift/{repo}/contents/pkg --jq '.[] | {name, path, type}'
+
+   # Identify key directories
+   gh api repos/openshift/{repo}/contents/pkg/controllers --jq '.[] | .name'
+   gh api repos/openshift/{repo}/contents/api --jq '.[] | .name'
+   ```
+
+3. **Extract API types** (for Kubernetes operators):
+   ```bash
+   # List CRDs
+   gh api repos/openshift/{repo}/contents/config/crd/bases --jq '.[] | .name'
+
+   # Download a sample CRD to understand API
+   gh api repos/openshift/{repo}/contents/config/crd/bases/{crd-file}.yaml --raw
+   ```
+   - Parse CRD to extract: kind, group, version, key spec fields
+
+4. **Identify controllers**:
+   - Search for files matching `*controller.go` or `*reconciler.go`
+   - Note controller names and responsibilities
+
+5. **Output structure analysis**:
+   ```markdown
+   **Architecture**: Kubernetes Operator (controller-runtime)
+   **Key Packages**:
+   - pkg/controllers/{name}: {inferred purpose}
+   - pkg/api/v1: API type definitions
+   **API Types**:
+   - {Kind}: {brief description from CRD}
+   ```
+
+#### 2.7.3: Understand Implementation Logic
+
+**Analyze reconciliation patterns** (for operators):
+
+1. **Search for Reconcile function**:
+   ```bash
+   # Use Grep to find reconciliation logic
+   gh search code --repo openshift/{repo} "func.*Reconcile.*Context"
+   ```
+
+2. **Identify integration patterns**:
+   - Search for client initialization: `kubernetes.NewForConfig`, `dynamic.NewForConfig`
+   - Check `go.mod` for key dependencies (client-go, AWS SDK, Prometheus client, etc.)
+   - Note external systems the component integrates with
+
+3. **Identify error handling patterns**:
+   - Search for error handling patterns in reconciliation code
+   - Note retry logic, exponential backoff, circuit breakers
+
+4. **Output implementation summary**:
+   ```markdown
+   **Implementation Pattern**: Controller reconciliation loop
+   **Integration Points**:
+   - Kubernetes API (via client-go)
+   - {External service}: {purpose}
+   **Key Patterns**:
+   - {Pattern identified}: {description}
+   ```
+
+#### 2.7.4: Gather Historical Context
+
+**Search for relevant PRs to understand design decisions**:
+
+1. **Extract keywords from RFE**:
+   - Use RFE title, nature, desired behavior to create search keywords
+   - Example: "certificate rotation", "custom configuration", "ACME"
+
+2. **Search merged PRs**:
+   ```bash
+   # Search by keywords
+   gh search prs \
+     --repo openshift/{repo} \
+     --state merged \
+     --sort updated \
+     --limit 10 \
+     "{keyword1} {keyword2}" \
+     --json number,title,url,body,mergedAt
+   ```
+
+3. **Rank PRs by relevance**:
+   - Score PRs based on keyword matches in title (high weight) and body (medium weight)
+   - Prioritize recent PRs (merged in last 6-12 months)
+   - Select top 5 most relevant PRs for deep analysis
+
+4. **Analyze PR discussions** (for top 3-5 PRs):
+   ```bash
+   # Get PR details with comments and reviews
+   gh pr view {pr-number} \
+     --repo openshift/{repo} \
+     --json number,title,body,comments,reviews
+   ```
+
+   Extract from PR body and comments:
+   - Design sections: "## Design", "## Architecture", "## Approach", "## Rationale"
+   - Trade-off discussions: Comments mentioning "why", "alternative", "trade-off"
+   - Lessons learned: References to previous issues or bugs
+
+5. **Search for Architecture Decision Records (ADRs)**:
+   ```bash
+   # Check common ADR locations
+   gh api repos/openshift/{repo}/contents/docs/adr --jq '.[] | {name, path}'
+   gh api repos/openshift/{repo}/contents/docs/design --jq '.[] | {name, path}'
+   ```
+   - If ADRs exist, download and parse key decisions
+
+6. **Search for related issues/bugs with lessons**:
+   ```bash
+   # Search for closed bugs with learning opportunities
+   gh search issues \
+     --repo openshift/{repo} \
+     "learned OR mistake OR lesson OR regression" \
+     --state closed \
+     --limit 5 \
+     --json number,title,body,labels
+   ```
+
+7. **Output historical context**:
+   ```markdown
+   **Relevant PRs**:
+   - #{pr-number}: {title}
+     - **Design**: {key design decision}
+     - **Why**: {rationale from discussion}
+     - **Lesson**: {what was learned}
+
+   **Architecture Decisions**:
+   - {ADR title}: {decision summary}
+
+   **Lessons Learned**:
+   - Issue #{number}: {lesson extracted}
+   ```
+
+#### 2.7.5: Synthesize Insights
+
+**Combine all gathered context into actionable guidance**:
+
+1. **Generate component summary**:
+   - **What it does**: Based on README, CRDs, package structure
+   - **Why it exists**: Based on project description and use cases
+   - **How it works**: Based on architecture pattern and reconciliation flow
+
+2. **Extract key implementation patterns**:
+   - Controller patterns from code analysis
+   - Design patterns from PR discussions
+   - Error handling and retry patterns
+
+3. **Distill design principles**:
+   - From ADRs: architectural constraints and decisions
+   - From PR discussions: team conventions and guidelines
+   - From lessons learned: anti-patterns to avoid
+
+4. **Identify risk factors**:
+   - Complexity risks: Number of CRDs, integration points
+   - Historical risks: Past bugs, regressions, incidents
+   - Integration risks: External dependencies, API contracts
+
+5. **Recommend approach for RFE**:
+   - Suggest which patterns to follow
+   - Identify which existing code/logic to reuse (reference specific PRs)
+   - Highlight pitfalls to avoid (based on lessons learned)
+   - Note dependencies on other teams/components
+
+6. **Add comprehensive context section to output**:
+   ```markdown
+   ## Comprehensive Component Context
+
+   ### Component: {component-name}
+
+   **Repositories**:
+   - Downstream: openshift/{repo}
+   - Upstream: {org}/{upstream-repo}
+   - Related: {related repos}
+
+   **What it does**: {1-2 sentence summary}
+
+   **Why it exists**: {purpose and value}
+
+   **How it works**:
+   - Architecture: {pattern}
+   - Reconciliation: {flow summary for operators}
+   - Integration: {external systems}
+
+   **Key Implementation Patterns**:
+   1. {Pattern}: {description}
+   2. {Pattern}: {description}
+
+   **Historical Context**:
+   - PR #{number}: {key insight}
+   - ADR: {decision reference}
+   - Lesson: {anti-pattern to avoid}
+
+   **Risk Factors**:
+   - {Risk}: {mitigation}
+
+   **Recommended Approach for RFE**:
+   - {Guidance based on analysis}
+   - Reuse: {specific code/PRs to leverage}
+   - Avoid: {pitfalls from lessons learned}
+   ```
+
+#### 2.7.6: Integration with Epic/Story Generation
+
+**Use comprehensive context when generating epics and stories**:
+
+1. **In Epic scope definition** (Step 3):
+   - Reference architecture patterns identified
+   - Note integration points that must be addressed
+   - Include risks from historical analysis
+
+2. **In Technical Complexity assessment** (Step 3.5):
+   - Use codebase structure to estimate complexity
+   - Reference similar PRs for effort calibration
+   - Note unknowns based on missing patterns
+
+3. **In Story implementation guidance**:
+   - Reference specific files/packages to modify
+   - Suggest patterns to follow from historical PRs
+   - Include lessons learned as acceptance criteria or notes
+
+4. **In Effort estimation** (Step 4.6):
+   - Calibrate estimates using similar past PRs
+   - Example: "Similar to PR #456 which took 4 days"
+
+**Performance Considerations**:
+
+- **Caching**: Cache repository metadata and PR search results to `.work/jira/analyze-rfe/cache/`
+- **Rate limiting**: Respect GitHub API rate limits (5000 req/hour for authenticated users)
+- **Selective depth**: Limit deep PR analysis to top 5 PRs
+- **Parallel execution**: Process multiple components concurrently if applicable
+
+**Error Handling**:
+
+- **Repository not found**: Note component doesn't have public repo, proceed without comprehensive context
+- **API rate limit**: Cache what was gathered, note "analysis incomplete due to rate limit"
+- **Private repositories**: Note access issue, suggest running with proper GitHub token
+
+**Configuration**:
+
+Users can control analysis depth via environment variables (optional):
+- `ANALYZE_RFE_MAX_PRS=10`: Max PRs to search (default: 10)
+- `ANALYZE_RFE_DEEP_DIVE_PRS=5`: Number of PRs to analyze in detail (default: 5)
+- `GITHUB_TOKEN`: GitHub token for API access (required for private repos and higher rate limits)
+
 ### Step 3: Generate EPIC(s)
 
 **Objective**: Break down the RFE into one or more epics.
@@ -406,6 +709,72 @@ As a <role>, I want to <action>, so that <value>.
 | Component | Purpose | Key Areas |
 |-----------|---------|-----------|
 | [name] | [from context.md] | [paths] |
+
+## Comprehensive Component Context
+
+### Component: [component-name]
+*[If repositories found and analyzed - otherwise note "No public repository found for analysis"]*
+
+**Repositories**:
+- Downstream: openshift/{repo-name}
+- Upstream: {org}/{upstream-repo} (if identified)
+- Related: {comma-separated list of related repos}
+
+**What it does**: {1-2 sentence description based on README and structure analysis}
+
+**Why it exists**: {purpose and business value}
+
+**How it works**:
+- **Architecture**: {Kubernetes Operator | Library | CLI Tool | Microservice}
+- **Key Packages**: {top 3-5 packages and their roles}
+  - pkg/controllers/{name}: {purpose}
+  - pkg/api/v1: {API definitions}
+- **API Types** (for operators): {CRD kinds with brief description}
+- **Integration Points**: {external systems - Kubernetes API, databases, cloud services}
+
+**Key Implementation Patterns**:
+1. **{Pattern name}**: {description from code or PR analysis}
+2. **{Pattern name}**: {description}
+
+**Critical Code Paths**:
+- `{file path}`: {what it does and complexity estimate}
+
+**Historical Context**:
+
+**Relevant PRs**:
+- PR #{number} (merged {date}): {title}
+  - **Design**: {key design decision from PR}
+  - **Why**: {rationale from discussion}
+  - **Lesson**: {what was learned or why this approach}
+  - **Scope**: {number of files changed, complexity}
+
+**Architecture Decisions** (if ADRs found):
+- **{ADR title}**: {decision summary}
+  - **Rationale**: {why this decision}
+  - **Trade-offs**: {pros and cons}
+
+**Design Principles** (from PR discussions and ADRs):
+1. {Principle}: {description}
+2. {Principle}: {description}
+
+**Lessons Learned** (from closed issues/bugs):
+- Issue #{number}: {title}
+  - **Lesson**: {what to avoid or ensure}
+  - **Impact**: {how it affects this RFE}
+
+**Risk Factors**:
+- **{Risk type}** (Complexity/Historical/Integration): {description}
+  - **Mitigation**: {how to address}
+
+**Recommended Approach for RFE Implementation**:
+- Follow {architecture pattern} established in {reference}
+- Reuse {specific code/logic} from PR #{number}
+- Apply design principle: {principle from analysis}
+- Avoid {anti-pattern} (learned from Issue #{number})
+- Consider {specific technical approach} based on {evidence}
+- Estimate calibration: Similar to PR #{number} which modified {X} files and took {Y} time
+
+---
 
 ## Related Work
 *[Based on Jira search - omit if no relevant issues found]*

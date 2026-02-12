@@ -34,7 +34,13 @@ The command performs deep analysis of:
 - **Non-functional requirements**: Generates NFR stories for performance, security, scalability, observability
 - **Effort estimation**: Provides t-shirt sizing (XS/S/M/L/XL) for sprint planning
 - **Related work discovery**: Searches Jira for related RFEs, epics, bugs to prevent duplication
-- **Workspace context** (optional): When the workspace contains `context.md` files (e.g., `docs/component-context/context.md`), the command loads component Purpose, Scope, and Key Areas to enrich the breakdown.
+- **Workspace context** (optional): When the workspace contains `context.md` files (e.g., `docs/component-context/context.md`), the command loads component Purpose, Scope, and Key Areas to enrich the breakdown
+- **Comprehensive component context**: Deep repository analysis including:
+  - Repository discovery (downstream/upstream/related repos)
+  - Codebase structure analysis (architecture patterns, key packages, API types)
+  - Implementation logic understanding (reconciliation flows, integration patterns)
+  - Historical context (relevant PRs, design discussions, ADRs, lessons learned)
+  - Synthesized insights (design principles, risk factors, recommended approach)
 
 ## Implementation
 
@@ -43,15 +49,21 @@ This command invokes the `analyze-rfe` skill to:
 1. **Fetch RFE** - Retrieve the RFE from Jira via MCP
 2. **Parse Structure** - Extract nature, description, business requirements, affected components
 3. **Discover Related Work** - Search Jira for related RFEs, epics, bugs; identify reuse opportunities
-4. **Gather Workspace Context** - Search for `context.md` files in the workspace (e.g., `docs/component-context/context.md`). When components match the RFE, load Purpose, Scope, Key Areas, and use them to enrich epics and stories.
-5. **Generate EPIC(s)** - Break down the RFE into one or more epics with scope and acceptance criteria
-6. **Assess Technical Complexity** - Analyze complexity, identify risks, blockers, and tech debt impact
-7. **Map Dependencies** - Identify epic dependencies, integration points, and cross-team handoffs
-8. **Generate User Stories** - Create user stories for each epic in proper "As a... I want... So that..." format
-9. **Add NFR Stories** - Generate non-functional requirement stories for performance, security, scalability, observability
-10. **Estimate Effort** - Provide t-shirt sizing (XS/S/M/L/XL) and map story dependencies
-11. **Define Outcomes** - Specify the measurable outcomes and value each story delivers
-12. **Generate Implementation Summary** - Aggregate effort, dependencies, and risks across all epics
+4. **Gather Workspace Context** - Search for `context.md` files in the workspace (e.g., `docs/component-context/context.md`). When components match the RFE, load Purpose, Scope, Key Areas, and use them to enrich epics and stories
+5. **Comprehensive Component Context** - For affected components:
+   - Discover repositories (downstream, upstream, related)
+   - Analyze codebase structure (architecture, packages, API types)
+   - Understand implementation logic (patterns, integration points)
+   - Gather historical context (PRs, design discussions, ADRs, lessons learned)
+   - Synthesize insights (design principles, recommended approach, risks)
+6. **Generate EPIC(s)** - Break down the RFE into one or more epics with scope and acceptance criteria
+7. **Assess Technical Complexity** - Analyze complexity, identify risks, blockers, and tech debt impact
+8. **Map Dependencies** - Identify epic dependencies, integration points, and cross-team handoffs
+9. **Generate User Stories** - Create user stories for each epic in proper "As a... I want... So that..." format
+10. **Add NFR Stories** - Generate non-functional requirement stories for performance, security, scalability, observability
+11. **Estimate Effort** - Provide t-shirt sizing (XS/S/M/L/XL) and map story dependencies (calibrated using historical PR analysis when available)
+12. **Define Outcomes** - Specify the measurable outcomes and value each story delivers
+13. **Generate Implementation Summary** - Aggregate effort, dependencies, and risks across all epics
 
 For detailed implementation, see:
 - `plugins/jira/skills/analyze-rfe/SKILL.md`
@@ -93,7 +105,41 @@ For detailed implementation, see:
 **Reuse Opportunities**: [Libraries/components to leverage]
 
 ## Component Context (from workspace)
-*[If context.md found]*
+*[If context.md found - basic component purpose and scope]*
+
+## Comprehensive Component Context
+*[If repository analysis performed - deep technical understanding]*
+
+### Component: [component-name]
+
+**Repositories**:
+- Downstream: openshift/{repo}
+- Upstream: {org}/{upstream-repo}
+- Related: {related repos}
+
+**What it does**: {concise description}
+**Why it exists**: {purpose and value}
+**How it works**:
+- Architecture: {pattern (e.g., Kubernetes Operator)}
+- Key packages: {important code areas}
+- Integration: {external systems}
+
+**Key Implementation Patterns**:
+1. {Pattern}: {description}
+
+**Historical Context**:
+- PR #{number} ({date}): {key design decision or lesson}
+- ADR: {architecture decision reference}
+- Lesson from Issue #{number}: {anti-pattern to avoid}
+
+**Risk Factors**:
+- {Risk type}: {description and mitigation}
+
+**Recommended Approach for RFE**:
+- {Guidance based on component analysis}
+- Reuse: {reference to specific PR or code to leverage}
+- Follow: {design principles to respect}
+- Avoid: {pitfalls from historical analysis}
 
 ## EPIC(s)
 
