@@ -370,7 +370,7 @@ class GitHubRepoAnalyzer:
         for org in upstream_orgs:
             search_data = self._run_gh_command(
                 ["search", "repos", "--owner", org, search_term,
-                 "--json", "name,description,url,stargazerCount", "--limit", "3"],
+                 "--json", "name,description,url,stargazersCount", "--limit", "3"],
                 cache_key=f"upstream_search_{org}_{search_term}"
             )
 
@@ -379,7 +379,7 @@ class GitHubRepoAnalyzer:
                     results = json.loads(search_data)
                     if results:
                         # Return the most starred result (likely the main project)
-                        best_match = max(results, key=lambda r: r.get("stargazerCount", 0))
+                        best_match = max(results, key=lambda r: r.get("stargazersCount", 0))
                         return {
                             "name": f"{org}/{best_match['name']}",
                             "url": best_match.get("url"),
