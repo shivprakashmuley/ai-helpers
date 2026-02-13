@@ -411,7 +411,7 @@ gatherer = ComponentContextGatherer(verbose=True)
 results = gatherer.gather_multiple_components(
     component_names=components,
     rfe_keywords=rfe_keywords,
-    max_prs=10,
+    max_prs=50,
     deep_dive_prs=3
 )
 

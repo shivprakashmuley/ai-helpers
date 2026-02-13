@@ -174,13 +174,13 @@ RFEs typically contain these sections (Jira Wiki markup):
 
 **When to Execute**: Always attempt this step for affected components. If repositories cannot be found or GitHub API is unavailable, gracefully degrade and proceed with available information.
 
-**Upstream Analysis**: When an upstream repository is discovered, ask the user if upstream analysis is needed. This is particularly valuable for:
+**Upstream Analysis**: When an upstream repository is discovered, it is analyzed by default. This is particularly valuable for:
 - **Upstream adoption RFEs**: Features being adopted from upstream projects
 - **Cross-project alignment**: Understanding differences between upstream and downstream
 - **Feature parity**: Identifying upstream capabilities not yet in OpenShift
 - **Design validation**: Comparing OpenShift-specific approaches with upstream decisions
 
-Skip upstream analysis for:
+To skip upstream analysis, use the `--skip-upstream` flag. This may be appropriate for:
 - **OpenShift-only features**: No upstream equivalent
 - **Quick analysis**: Time-constrained situations
 - **Known divergence**: Component has intentionally diverged from upstream
@@ -444,37 +444,19 @@ For each affected component:
 **Objective**: When upstream repository exists, optionally analyze it for comparative insights.
 
 **When to Execute**:
-- **Always ask the user** if upstream analysis should be performed when an upstream repo is discovered
-- Recommend "Yes" for: Upstream adoption RFEs, feature parity analysis, cross-project alignment
-- Recommend "No" for: OpenShift-only features, time-constrained analysis, known divergence
+- **By default**, upstream analysis is performed automatically when an upstream repo is discovered
+- Particularly valuable for: Upstream adoption RFEs, feature parity analysis, cross-project alignment
+- Use `--skip-upstream` flag to skip for: OpenShift-only features, time-constrained analysis, known divergence
 
 **Actions**:
 
-1. **Prompt the user**:
-   ```
-   Upstream Repository Found for {component}
-   Upstream: {org}/{repo}
-
-   Upstream analysis includes:
-   - Codebase structure and architecture
-   - Historical PR analysis and design decisions
-   - Architecture Decision Records (ADRs)
-
-   This is useful for:
-   - Understanding original design intent
-   - Finding upstream features to adopt
-   - Identifying differences between upstream/downstream
-
-   Analyze upstream repository? [y/N]:
-   ```
-
-2. **If user approves**, perform upstream analysis:
+1. **Perform upstream analysis** (unless explicitly skipped):
    - **Structure analysis**: Same as downstream (architecture, CRDs, packages)
    - **PR search**: Use same keywords, find relevant upstream PRs
    - **Deep-dive top PRs**: Extract design decisions, rationale
    - **Search upstream ADRs**: Find architecture documentation
 
-3. **Generate comparative insights**:
+2. **Generate comparative insights**:
    ```markdown
    **Upstream Analysis**:
    *Analysis of upstream repository: {org}/{repo}*
@@ -497,7 +479,7 @@ For each affected component:
    - Consider contributing OpenShift enhancements back to upstream
    ```
 
-4. **Integration with recommendations**:
+3. **Integration with recommendations**:
    - Reference upstream PRs in "Recommended Approach"
    - Note architectural differences and their rationale
    - Identify opportunities for upstream contribution
@@ -505,13 +487,16 @@ For each affected component:
 
 **CLI Usage**:
 ```bash
-# Always analyze upstream
-./gather_component_context.py cert-manager --keywords "cert" --analyze-upstream
+# Default behavior - analyzes upstream and operands
+./gather_component_context.py cert-manager --keywords "cert"
 
-# Never analyze upstream
+# Skip upstream analysis
 ./gather_component_context.py cert-manager --keywords "cert" --skip-upstream
 
-# Non-interactive mode (skips upstream by default)
+# Skip operand analysis
+./gather_component_context.py cert-manager --keywords "cert" --skip-operands
+
+# Non-interactive mode (analyzes upstream and operands by default)
 ./gather_component_context.py cert-manager --keywords "cert" --no-interactive
 ```
 
@@ -558,7 +543,7 @@ For each affected component:
 **Configuration**:
 
 Users can control analysis depth via environment variables (optional):
-- `ANALYZE_RFE_MAX_PRS=10`: Max PRs to search (default: 10)
+- `ANALYZE_RFE_MAX_PRS=50`: Max PRs to search (default: 50)
 - `ANALYZE_RFE_DEEP_DIVE_PRS=5`: Number of PRs to analyze in detail (default: 5)
 - `GITHUB_TOKEN`: GitHub token for API access (required for private repos and higher rate limits)
 

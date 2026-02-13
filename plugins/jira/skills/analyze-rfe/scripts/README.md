@@ -345,7 +345,7 @@ The `gather_component_context.py` script is invoked by the `/jira:analyze-rfe` c
    context = gather_component_context(
        component_name,
        keywords=keywords,
-       max_prs=10,
+       max_prs=50,
        deep_dive=3
    )
 

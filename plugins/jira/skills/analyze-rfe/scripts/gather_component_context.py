@@ -41,7 +41,7 @@ class ComponentContextGatherer:
         self,
         component_name: str,
         rfe_keywords: Optional[List[str]] = None,
-        max_prs: int = 10,
+        max_prs: int = 50,
         deep_dive_prs: int = 3,
         analyze_upstream: Optional[bool] = None,
         analyze_operands: Optional[bool] = None,
@@ -285,7 +285,7 @@ class ComponentContextGatherer:
         self,
         component_names: List[str],
         rfe_keywords: Optional[List[str]] = None,
-        max_prs: int = 10,
+        max_prs: int = 50,
         deep_dive_prs: int = 3,
         analyze_upstream: Optional[bool] = None,
         analyze_operands: Optional[bool] = None,
@@ -521,8 +521,8 @@ Examples:
     parser.add_argument(
         "--max-prs",
         type=int,
-        default=10,
-        help="Maximum PRs to search per component (default: 10)"
+        default=50,
+        help="Maximum PRs to search per component (default: 50)"
     )
 
     parser.add_argument(
@@ -557,50 +557,50 @@ Examples:
     parser.add_argument(
         "--analyze-upstream",
         action="store_true",
-        help="Always analyze upstream repositories (skip prompt)"
+        help="Always analyze upstream repositories (default behavior)"
     )
 
     parser.add_argument(
         "--skip-upstream",
         action="store_true",
-        help="Never analyze upstream repositories (skip prompt)"
+        help="Skip analyzing upstream repositories"
     )
 
     parser.add_argument(
         "--analyze-operands",
         action="store_true",
-        help="Always analyze operand repositories (skip prompt)"
+        help="Always analyze operand repositories (default behavior)"
     )
 
     parser.add_argument(
         "--skip-operands",
         action="store_true",
-        help="Never analyze operand repositories (skip prompt)"
+        help="Skip analyzing operand repositories"
     )
 
     parser.add_argument(
         "--no-interactive",
         action="store_true",
-        help="Non-interactive mode (don't prompt for upstream/operands, default: skip both)"
+        help="Non-interactive mode (analyzes upstream and operands by default)"
     )
 
     args = parser.parse_args()
 
     # Determine upstream analysis setting
-    analyze_upstream = None
-    if args.analyze_upstream:
-        analyze_upstream = True
-    elif args.skip_upstream:
+    if args.skip_upstream:
         analyze_upstream = False
-    # else None (will prompt if interactive)
+    elif args.analyze_upstream:
+        analyze_upstream = True
+    else:
+        analyze_upstream = True  # Default: analyze upstream
 
     # Determine operand analysis setting
-    analyze_operands = None
-    if args.analyze_operands:
-        analyze_operands = True
-    elif args.skip_operands:
+    if args.skip_operands:
         analyze_operands = False
-    # else None (will prompt if interactive)
+    elif args.analyze_operands:
+        analyze_operands = True
+    else:
+        analyze_operands = True  # Default: analyze operands
 
     # Determine interactive mode
     interactive = not args.no_interactive
