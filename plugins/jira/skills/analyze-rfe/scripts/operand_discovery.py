@@ -89,9 +89,9 @@ class OperandDiscovery:
         """
         operands = []
 
-        # Strategy 1: README analysis
-        readme_operands = self._extract_from_readme(operator_repo_name)
-        operands.extend(readme_operands)
+        # Strategy 1: Image references from assets/manifests (most reliable)
+        image_operands = self._extract_from_image_references(operator_repo_name)
+        operands.extend(image_operands)
 
         # Strategy 2: Deployment manifests
         manifest_operands = self._extract_from_manifests(operator_repo_name)
@@ -101,7 +101,11 @@ class OperandDiscovery:
         csv_operands = self._extract_from_csv(operator_repo_name)
         operands.extend(csv_operands)
 
-        # Deduplicate by name
+        # Strategy 4: README analysis
+        readme_operands = self._extract_from_readme(operator_repo_name)
+        operands.extend(readme_operands)
+
+        # Deduplicate by name (prioritize earlier strategies)
         unique_operands = {}
         for operand in operands:
             name = operand.get("name", "").lower()
@@ -109,6 +113,86 @@ class OperandDiscovery:
                 unique_operands[name] = operand
 
         return list(unique_operands.values())
+
+    def _extract_from_image_references(self, repo_name: str) -> List[Dict]:
+        """
+        Extract operands from container image references in asset files
+
+        This is the most reliable method as it finds the actual operand images
+        being deployed by the operator.
+
+        Args:
+            repo_name: Repository name
+
+        Returns:
+            List of operand dicts
+        """
+        operands = []
+
+        # Common directories containing deployment assets
+        asset_paths = [
+            "assets",
+            "manifests",
+            "deploy",
+            "config/manifests",
+            "bundle/manifests"
+        ]
+
+        for path in asset_paths:
+            # Get all YAML files in this directory
+            files_data = self._run_gh_command(
+                ["api", f"repos/{repo_name}/contents/{path}",
+                 "--jq", ".[] | select(.name | endswith(\".yaml\") or endswith(\".yml\")) | .name"],
+                cache_key=f"assets_{repo_name.replace('/', '_')}_{path.replace('/', '_')}"
+            )
+
+            if not files_data:
+                continue
+
+            for filename in files_data.strip().split('\n'):
+                if not filename:
+                    continue
+
+                # Get file content
+                file_content = self._run_gh_command(
+                    ["api", f"repos/{repo_name}/contents/{path}/{filename}", "--jq", ".content"],
+                    cache_key=f"asset_file_{repo_name.replace('/', '_')}_{path.replace('/', '_')}_{filename}"
+                )
+
+                if file_content:
+                    try:
+                        import base64
+                        content = base64.b64decode(file_content.strip()).decode('utf-8')
+                    except Exception:
+                        continue
+
+                    # Extract image references
+                    # Pattern matches: image: registry.io/org/image-name:tag
+                    image_patterns = [
+                        # Standard image field
+                        r'image:\s*["\']?(?:.*?/)?([a-zA-Z0-9][a-zA-Z0-9_-]+):',
+                        # Quay.io images
+                        r'quay\.io/[^/]+/([a-zA-Z0-9][a-zA-Z0-9_-]+):',
+                        # registry.k8s.io images
+                        r'registry\.k8s\.io/[^/]+/([a-zA-Z0-9][a-zA-Z0-9_-]+):',
+                        # gcr.io images
+                        r'gcr\.io/[^/]+/([a-zA-Z0-9][a-zA-Z0-9_-]+):',
+                    ]
+
+                    for pattern in image_patterns:
+                        matches = re.findall(pattern, content)
+                        for image_name in matches:
+                            # Clean up image name
+                            image_name = image_name.strip().lower()
+
+                            # Filter out operator image itself and common base images
+                            if self._is_valid_operand_name(image_name) and "operator" not in image_name:
+                                operands.append({
+                                    "name": image_name,
+                                    "source": f"Image reference ({path}/{filename})"
+                                })
+
+        return operands
 
     def _extract_from_readme(self, repo_name: str) -> List[Dict]:
         """Extract operand references from README"""
@@ -307,7 +391,7 @@ class OperandDiscovery:
 
     def enrich_with_repositories(self, operands: List[Dict], org: str = "openshift") -> List[Dict]:
         """
-        Enrich operand list with repository information
+        Enrich operand list with repository information using dynamic discovery
 
         Args:
             operands: List of operand dicts
@@ -321,11 +405,18 @@ class OperandDiscovery:
         for operand in operands:
             operand_name = operand.get("name", "")
 
-            # Try to find repository
+            # Try multiple patterns to find the repository
             repo_patterns = [
+                # Exact match
                 f"{org}/{operand_name}",
+                # With common suffixes
                 f"{org}/{operand_name}-controller",
                 f"{org}/{operand_name}-server",
+                f"{org}/{operand_name}-daemon",
+                # Handle CSI driver naming
+                f"{org}/{operand_name}",  # secrets-store-csi-driver
+                # Handle name variations (underscores to hyphens)
+                f"{org}/{operand_name.replace('_', '-')}",
             ]
 
             repo_found = None
@@ -347,12 +438,50 @@ class OperandDiscovery:
                     except json.JSONDecodeError:
                         continue
 
+            # If not found by exact patterns, try searching
+            if not repo_found:
+                repo_found = self._search_for_operand_repo(operand_name, org)
+
             enriched.append({
                 **operand,
                 "repository": repo_found
             })
 
         return enriched
+
+    def _search_for_operand_repo(self, operand_name: str, org: str = "openshift") -> Optional[Dict]:
+        """
+        Search for operand repository when exact patterns don't match
+
+        Args:
+            operand_name: Operand name
+            org: GitHub organization
+
+        Returns:
+            Repository info or None
+        """
+        # Search in the organization
+        search_data = self._run_gh_command(
+            ["search", "repos", "--owner", org, operand_name,
+             "--json", "name,url,description", "--limit", "3"],
+            cache_key=f"operand_search_{org}_{operand_name}"
+        )
+
+        if search_data:
+            try:
+                results = json.loads(search_data)
+                if results:
+                    # Return first match (most relevant)
+                    best_match = results[0]
+                    return {
+                        "name": f"{org}/{best_match['name']}",
+                        "url": best_match.get("url"),
+                        "description": best_match.get("description", "")
+                    }
+            except json.JSONDecodeError:
+                pass
+
+        return None
 
 
 def main():

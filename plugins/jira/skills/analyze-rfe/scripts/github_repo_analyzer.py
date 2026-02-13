@@ -90,7 +90,7 @@ class GitHubRepoAnalyzer:
 
     def discover_repositories(self, component_name: str) -> Dict[str, any]:
         """
-        Discover downstream, upstream, and related repositories
+        Discover downstream, upstream, and related repositories using dynamic strategies
 
         Args:
             component_name: Component name (e.g., "cert-manager", "hypershift")
@@ -105,81 +105,292 @@ class GitHubRepoAnalyzer:
             "related": []
         }
 
+        # Step 1: Find downstream repository
+        repos["downstream"] = self._find_downstream_repo(component_name)
+
+        # Step 2: Find upstream repository (multiple strategies)
+        if repos["downstream"]:
+            downstream_name = repos["downstream"]["name"]
+
+            # Strategy 1: Check if repo is a fork
+            upstream = self._find_upstream_via_fork(downstream_name)
+            if upstream:
+                repos["upstream"] = upstream
+
+            # Strategy 2: Parse go.mod for upstream dependencies
+            if not repos["upstream"]:
+                upstream = self._find_upstream_via_gomod(downstream_name, component_name)
+                if upstream:
+                    repos["upstream"] = upstream
+
+            # Strategy 3: Parse README for upstream references
+            if not repos["upstream"]:
+                upstream = self._find_upstream_via_readme(downstream_name)
+                if upstream:
+                    repos["upstream"] = upstream
+
+            # Strategy 4: Search common upstream orgs
+            if not repos["upstream"]:
+                upstream = self._find_upstream_via_search(component_name)
+                if upstream:
+                    repos["upstream"] = upstream
+
+        # Step 3: Search for related repos
+        related = self._search_related_repos(component_name)
+        repos["related"] = related
+
+        return repos
+
+    def _find_downstream_repo(self, component_name: str) -> Optional[Dict]:
+        """
+        Find downstream OpenShift repository using common patterns
+
+        Args:
+            component_name: Component name
+
+        Returns:
+            Downstream repo info or None
+        """
         # Try common OpenShift repo patterns
         patterns = [
             component_name,
             f"{component_name}-operator",
             f"cluster-{component_name}-operator",
             f"{component_name}-controller",
+            f"{component_name}-csi-driver-operator",
+            # Handle names with "csi" variations
+            component_name.replace("-csi", "-csi-driver-operator"),
+            component_name.replace("-csi", "s-csi-driver-operator"),  # secret-store-csi -> secrets-store-csi-driver-operator
         ]
 
         for pattern in patterns:
             repo_data = self._run_gh_command(
-                ["repo", "view", f"openshift/{pattern}", "--json", "name,url,description,defaultBranchRef"],
+                ["repo", "view", f"openshift/{pattern}", "--json", "name,url,description,defaultBranchRef,isFork,parent"],
                 cache_key=f"repo_openshift_{pattern}"
             )
 
             if repo_data:
                 try:
                     repo_info = json.loads(repo_data)
-                    repos["downstream"] = {
+                    return {
                         "name": f"openshift/{pattern}",
                         "url": repo_info.get("url"),
                         "description": repo_info.get("description", ""),
-                        "default_branch": repo_info.get("defaultBranchRef", {}).get("name", "main")
+                        "default_branch": repo_info.get("defaultBranchRef", {}).get("name", "main"),
+                        "is_fork": repo_info.get("isFork", False),
+                        "parent": repo_info.get("parent")
                     }
-                    break  # Found it
                 except json.JSONDecodeError:
                     continue
 
-        # If downstream found, try to find upstream from README
-        if repos["downstream"]:
-            upstream = self._find_upstream_reference(repos["downstream"]["name"])
-            if upstream:
-                repos["upstream"] = upstream
+        return None
 
-        # Search for related repos
-        related = self._search_related_repos(component_name)
-        repos["related"] = related
+    def _find_upstream_via_fork(self, repo_name: str) -> Optional[Dict]:
+        """
+        Find upstream by checking if repo is a GitHub fork
 
-        return repos
+        Args:
+            repo_name: Repository name (e.g., "openshift/secrets-store-csi-driver-operator")
 
-    def _find_upstream_reference(self, repo_name: str) -> Optional[Dict]:
-        """Extract upstream repository reference from README"""
+        Returns:
+            Upstream repo info or None
+        """
+        repo_data = self._run_gh_command(
+            ["repo", "view", repo_name, "--json", "isFork,parent"],
+            cache_key=f"fork_check_{repo_name.replace('/', '_')}"
+        )
+
+        if repo_data:
+            try:
+                repo_info = json.loads(repo_data)
+                if repo_info.get("isFork") and repo_info.get("parent"):
+                    parent = repo_info["parent"]
+                    return {
+                        "name": parent.get("nameWithOwner"),
+                        "url": parent.get("url"),
+                        "description": parent.get("description", ""),
+                        "discovery_method": "GitHub fork parent"
+                    }
+            except json.JSONDecodeError:
+                pass
+
+        return None
+
+    def _find_upstream_via_gomod(self, repo_name: str, component_name: str) -> Optional[Dict]:
+        """
+        Find upstream by parsing go.mod for dependencies
+
+        Args:
+            repo_name: Repository name
+            component_name: Component name to look for
+
+        Returns:
+            Upstream repo info or None
+        """
+        # Get go.mod content
+        gomod_data = self._run_gh_command(
+            ["api", f"repos/{repo_name}/contents/go.mod", "--jq", ".content"],
+            cache_key=f"gomod_{repo_name.replace('/', '_')}"
+        )
+
+        if not gomod_data:
+            return None
+
+        try:
+            # Decode base64
+            import base64
+            gomod_content = base64.b64decode(gomod_data.strip()).decode('utf-8')
+        except Exception:
+            return None
+
+        # Look for upstream dependencies
+        # Pattern: github.com/org/repo v1.2.3
+        import re
+
+        # Common upstream orgs for OpenShift components
+        upstream_orgs = [
+            "kubernetes-sigs",
+            "kubernetes",
+            "cert-manager",
+            "prometheus-operator",
+            "external-secrets",
+            "coredns",
+            "etcd-io",
+            "envoyproxy",
+            "grafana",
+        ]
+
+        # Normalize component name for matching
+        component_normalized = component_name.lower().replace("-operator", "").replace("cluster-", "")
+
+        for org in upstream_orgs:
+            # Pattern 1: Exact match on component name
+            pattern1 = rf'github\.com/{org}/([a-zA-Z0-9_-]*{re.escape(component_normalized)}[a-zA-Z0-9_-]*)\s'
+            match = re.search(pattern1, gomod_content, re.IGNORECASE)
+
+            if match:
+                upstream_repo = match.group(1)
+                return {
+                    "name": f"{org}/{upstream_repo}",
+                    "url": f"https://github.com/{org}/{upstream_repo}",
+                    "discovery_method": "go.mod dependency"
+                }
+
+            # Pattern 2: Look for CSI driver pattern
+            if "csi" in component_name.lower():
+                pattern2 = rf'github\.com/{org}/([a-zA-Z0-9_-]*csi[a-zA-Z0-9_-]*)\s'
+                match = re.search(pattern2, gomod_content, re.IGNORECASE)
+
+                if match:
+                    upstream_repo = match.group(1)
+                    return {
+                        "name": f"{org}/{upstream_repo}",
+                        "url": f"https://github.com/{org}/{upstream_repo}",
+                        "discovery_method": "go.mod CSI dependency"
+                    }
+
+        return None
+
+    def _find_upstream_via_readme(self, repo_name: str) -> Optional[Dict]:
+        """
+        Find upstream by parsing README for references
+
+        Args:
+            repo_name: Repository name
+
+        Returns:
+            Upstream repo info or None
+        """
         readme_data = self._run_gh_command(
-            ["repo", "view", repo_name, "--json", "readme"],
-            cache_key=f"readme_{repo_name.replace('/', '_')}"
+            ["api", f"repos/{repo_name}/readme", "--jq", ".content"],
+            cache_key=f"readme_upstream_{repo_name.replace('/', '_')}"
         )
 
         if not readme_data:
             return None
 
         try:
-            readme_info = json.loads(readme_data)
-            readme_text = readme_info.get("readme", "")
+            import base64
+            readme_text = base64.b64decode(readme_data.strip()).decode('utf-8')
+        except Exception:
+            return None
 
-            # Look for common upstream patterns
-            # e.g., "upstream: https://github.com/org/repo"
-            # e.g., "based on https://github.com/org/repo"
-            import re
-            patterns = [
-                r'upstream[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
-                r'based on[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
-                r'fork of[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
-            ]
+        # Enhanced upstream detection patterns
+        import re
+        patterns = [
+            # Explicit upstream mentions
+            r'upstream[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
+            r'based on[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
+            r'fork of[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
+            r'from[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
+            # Badge links (often point to upstream)
+            r'\[!\[.*?\]\(https?://.*?\)\]\(https?://github\.com/([^/\s]+)/([^/\s\)]+)\)',
+            # Documentation links
+            r'documentation[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
+            # See also / Related projects
+            r'see also[:\s]+(?:https?://)?github\.com/([^/\s]+)/([^/\s\)]+)',
+        ]
 
-            for pattern in patterns:
-                match = re.search(pattern, readme_text, re.IGNORECASE)
-                if match:
-                    org, repo = match.groups()
+        for pattern in patterns:
+            match = re.search(pattern, readme_text, re.IGNORECASE)
+            if match:
+                org, repo = match.groups()
+                # Filter out openshift org (we want upstream, not downstream)
+                if org.lower() != "openshift":
                     return {
                         "name": f"{org}/{repo}",
-                        "url": f"https://github.com/{org}/{repo}"
+                        "url": f"https://github.com/{org}/{repo}",
+                        "discovery_method": "README reference"
                     }
-        except (json.JSONDecodeError, Exception):
-            pass
 
         return None
+
+    def _find_upstream_via_search(self, component_name: str) -> Optional[Dict]:
+        """
+        Find upstream by searching common upstream organizations
+
+        Args:
+            component_name: Component name
+
+        Returns:
+            Upstream repo info or None
+        """
+        # Common upstream orgs in priority order
+        upstream_orgs = [
+            "kubernetes-sigs",
+            "kubernetes",
+            "cert-manager",
+            "prometheus-operator",
+            "external-secrets",
+        ]
+
+        # Normalize component name
+        search_term = component_name.lower().replace("-operator", "").replace("cluster-", "")
+
+        for org in upstream_orgs:
+            search_data = self._run_gh_command(
+                ["search", "repos", "--owner", org, search_term,
+                 "--json", "name,description,url,stargazerCount", "--limit", "3"],
+                cache_key=f"upstream_search_{org}_{search_term}"
+            )
+
+            if search_data:
+                try:
+                    results = json.loads(search_data)
+                    if results:
+                        # Return the most starred result (likely the main project)
+                        best_match = max(results, key=lambda r: r.get("stargazerCount", 0))
+                        return {
+                            "name": f"{org}/{best_match['name']}",
+                            "url": best_match.get("url"),
+                            "description": best_match.get("description", ""),
+                            "discovery_method": f"GitHub search in {org}"
+                        }
+                except json.JSONDecodeError:
+                    continue
+
+        return None
+
 
     def _search_related_repos(self, component_name: str, limit: int = 5) -> List[Dict]:
         """Search for related repositories in openshift org"""

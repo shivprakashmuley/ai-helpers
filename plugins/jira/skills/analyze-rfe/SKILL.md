@@ -187,43 +187,109 @@ To skip upstream analysis, use the `--skip-upstream` flag. This may be appropria
 
 **Actions**:
 
-#### 2.7.1: Discover Repositories
+#### 2.7.1: Discover Repositories (Dynamic Multi-Strategy Approach)
 
-For each affected component:
+For each affected component, use multiple discovery strategies to find downstream, upstream, and operand repositories:
 
-1. **Check workspace context.md for repository hints**:
-   - If context.md exists (from Step 2.5), check for repository URLs
-   - Extract downstream and upstream repo references
+**Step 1: Find Downstream Repository**
 
-2. **Search OpenShift GitHub organization** using gh CLI:
-   ```bash
-   # Check if repo exists (common patterns)
-   gh repo view openshift/{component-name} --json name,url,description
-   gh repo view openshift/{component-name}-operator --json name,url,description
-   gh repo view openshift/cluster-{component-name}-operator --json name,url,description
-   ```
+Try common OpenShift patterns:
+```bash
+# Pattern attempts (in order):
+gh repo view openshift/{component-name}
+gh repo view openshift/{component-name}-operator
+gh repo view openshift/cluster-{component-name}-operator
+gh repo view openshift/{component-name}-controller
+gh repo view openshift/{component-name}-csi-driver-operator
 
-3. **Extract upstream reference** from downstream README:
-   ```bash
-   # Get README to find upstream project
-   gh repo view openshift/{component-name} --json readme
-   # Look for "upstream:", "based on:", or links to upstream projects
-   ```
+# Handle naming variations:
+# secret-store-csi -> secrets-store-csi-driver-operator
+```
 
-4. **Search for related components**:
-   ```bash
-   # Find related repos by keyword
-   gh search repos --owner openshift "{component-keyword}" --json name,description,url --limit 10
-   ```
+**Step 2: Find Upstream Repository (4 strategies, tried in order)**
 
-5. **Output repository mapping**:
-   ```yaml
-   Component: {component-name}
-   Repositories:
-     Downstream: openshift/{repo-name}
-     Upstream: {org}/{upstream-repo}
-     Related: [list of related repos]
-   ```
+**Strategy 1: Check if repo is a GitHub fork**
+- Most reliable method when applicable
+- Use GitHub API to check `isFork` and `parent` fields
+```bash
+gh repo view openshift/{repo} --json isFork,parent
+# If isFork=true, parent is the upstream repo
+```
+
+**Strategy 2: Parse go.mod for upstream dependencies**
+- Highly reliable for Go-based operators
+- Look for dependencies from common upstream orgs:
+  - kubernetes-sigs (CSI drivers, cluster-api)
+  - kubernetes (core projects)
+  - cert-manager, prometheus-operator, external-secrets, etc.
+```bash
+gh api repos/openshift/{repo}/contents/go.mod --jq .content | base64 -d
+# Parse for: github.com/{upstream-org}/{upstream-repo}
+```
+
+**Strategy 3: Parse README for upstream references**
+- Enhanced pattern matching for:
+  - "upstream:", "based on:", "fork of:"
+  - Badge links (often point to upstream)
+  - Documentation links
+  - "see also" / related projects
+```bash
+gh api repos/openshift/{repo}/readme --jq .content | base64 -d
+# Search for GitHub.com links to non-openshift repos
+```
+
+**Strategy 4: Search common upstream organizations**
+- Fallback when other methods fail
+- Search kubernetes-sigs, kubernetes, etc. with component keywords
+```bash
+gh search repos --owner kubernetes-sigs {component-keywords}
+# Return most-starred match
+```
+
+**Step 3: Discover Operand Repositories**
+
+**Strategy 1: Parse image references from assets/manifests** (most reliable)
+- Extract container images from YAML manifests
+- Example: `image: quay.io/kubernetes-sigs/secrets-store-csi-driver:v1.0.0`
+- Image name → search for matching repository
+```bash
+# Search in assets/, manifests/, deploy/ directories
+gh api repos/openshift/{repo}/contents/assets/{file}.yaml
+# Extract: image: registry/org/operand-name:tag
+# Find repo: gh repo view openshift/operand-name
+```
+
+**Strategy 2: Parse deployment manifests**
+- Look in manifests/, deploy/, config/manifests/
+- Extract image references and deployment names
+
+**Strategy 3: Parse OLM ClusterServiceVersion (CSV)**
+- Extract related images and deployments from CSV
+- OLM bundles declare all managed workloads
+
+**Strategy 4: README analysis**
+- Look for "manages", "deploys", "operand" mentions
+- Extract component names from lists and descriptions
+
+**Output repository mapping**:
+```yaml
+Component: {component-name}
+Repositories:
+  Downstream: openshift/{repo-name}
+    Discovery: Direct pattern match
+  Upstream: {org}/{upstream-repo}
+    Discovery: go.mod dependency | GitHub fork | README reference | Search
+  Operands:
+    - name: {operand-name}
+      repository: openshift/{operand-repo}
+      Discovery: Image reference from assets/node.yaml
+```
+
+**Benefits of Dynamic Discovery**:
+- Works for **any** component, not just known ones
+- Multiple fallback strategies ensure high success rate
+- Most reliable methods tried first (fork detection, go.mod parsing)
+- No maintenance of static mapping files
 
 #### 2.7.2: Analyze Codebase Structure
 
