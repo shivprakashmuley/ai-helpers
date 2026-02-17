@@ -67,6 +67,14 @@ RFEs typically contain these sections (Jira Wiki markup):
 
 **Objective**: Retrieve the RFE from Jira.
 
+**Progress Indicator**: At the start of this step, output:
+```python
+print("=" * 70, file=sys.stderr)
+print("ANALYZING RFE", file=sys.stderr)
+print("=" * 70, file=sys.stderr)
+print(f"Step 1/6: Fetching RFE from Jira...", file=sys.stderr)
+```
+
 **Actions**:
 
 1. **Parse input**: Extract issue key from user input
@@ -108,11 +116,20 @@ RFEs typically contain these sections (Jira Wiki markup):
    - If 403: Display "Access denied. You need read permission for the RFE project"
    - If JIRA_PERSONAL_TOKEN not set: Display setup instructions
 
-4. **Display progress**: Show RFE title and link
+4. **Display completion**: After successful fetch, output:
+   ```python
+   print(f"✓ RFE fetched: {rfe_data['key']} - {rfe_data['fields']['summary'][:60]}...", file=sys.stderr)
+   print(file=sys.stderr)
+   ```
 
 ### Step 2: Parse and Extract RFE Content
 
 **Objective**: Extract structured information from the RFE description.
+
+**Progress Indicator**: At the start of this step, output:
+```python
+print(f"Step 2/6: Parsing RFE content and discovering related work...", file=sys.stderr)
+```
 
 **Actions**:
 
@@ -134,9 +151,22 @@ RFEs typically contain these sections (Jira Wiki markup):
    - Cross-team components → may warrant multiple epics
    - Phased delivery (MVP vs. advanced) → may warrant epic ordering
 
+4. **Display completion**: After parsing and related work search, output:
+   ```python
+   print(f"✓ RFE parsed, found {related_count} related issues", file=sys.stderr)
+   print(file=sys.stderr)
+   ```
+
 ### Step 2.5: Gather Workspace Context (Optional)
 
 **Objective**: Enrich analysis with component context from the workspace.
+
+**Progress Indicator**: If context files are found, output:
+```python
+print(f"  → Searching for workspace context files...", file=sys.stderr)
+# After search completes:
+print(f"  → Found {count} context file(s)", file=sys.stderr)
+```
 
 **Actions**:
 
@@ -173,6 +203,38 @@ RFEs typically contain these sections (Jira Wiki markup):
 **Objective**: Gather deep understanding of component architecture, implementation patterns, and historical decisions by analyzing repositories, code, and PR history.
 
 **When to Execute**: Always attempt this step for affected components. If repositories cannot be found or GitHub API is unavailable, gracefully degrade and proceed with available information.
+
+**Progress Indicator**: At the start of this step, output:
+```python
+print(f"  → Gathering comprehensive component context...", file=sys.stderr)
+print(f"     This includes repository analysis, PR search, and dependency analysis", file=sys.stderr)
+print(f"     (This may take 1-2 minutes for thorough analysis)", file=sys.stderr)
+```
+
+**Sub-step Progress Indicators**: As each sub-task completes, output:
+```python
+# After repository discovery:
+print(f"     ✓ Repositories discovered: {downstream_repo}", file=sys.stderr)
+
+# After structure analysis:
+print(f"     ✓ Codebase structure analyzed: {architecture}", file=sys.stderr)
+
+# After PR search (this is slow):
+print(f"     ✓ Found {len(prs)} relevant PRs", file=sys.stderr)
+
+# After RFE-specific file search:
+print(f"     ✓ Found {total_files} RFE-related files", file=sys.stderr)
+
+# After dependency analysis:
+print(f"     ✓ Analyzed {len(deps)} dependencies", file=sys.stderr)
+
+# After bug pattern search:
+print(f"     ✓ Found {len(bugs)} related bugs with lessons", file=sys.stderr)
+
+# When complete:
+print(f"  ✓ Component context gathered", file=sys.stderr)
+print(file=sys.stderr)
+```
 
 **Upstream Analysis**: When an upstream repository is discovered, it is analyzed by default. This is particularly valuable for:
 - **Upstream adoption RFEs**: Features being adopted from upstream projects
@@ -617,6 +679,17 @@ Users can control analysis depth via environment variables (optional):
 
 **Objective**: Break down the RFE into one or more epics.
 
+**Progress Indicator**: At the start of this step, output:
+```python
+print(f"Step 3/6: Generating EPIC breakdown...", file=sys.stderr)
+```
+
+After generating epics, output:
+```python
+print(f"✓ Generated {epic_count} EPIC(s)", file=sys.stderr)
+print(file=sys.stderr)
+```
+
 **Epic Criteria** (from create-epic skill):
 - **Scope**: Broader than a story, narrower than a feature
 - **Timebox**: Fits in a quarter/release (2-8 sprints)
@@ -714,6 +787,17 @@ Users can control analysis depth via environment variables (optional):
 ### Step 4: Generate User Stories
 
 **Objective**: Create user stories for each epic.
+
+**Progress Indicator**: At the start of this step, output:
+```python
+print(f"Step 4/6: Generating user stories with effort estimates...", file=sys.stderr)
+```
+
+After generating stories, output:
+```python
+print(f"✓ Generated {story_count} user stories across {epic_count} epic(s)", file=sys.stderr)
+print(file=sys.stderr)
+```
 
 **Story Format** (from create-story skill):
 ```
@@ -855,6 +939,11 @@ As a <role>, I want to <action>, so that <value>.
 
 **Objective**: Explicitly state the outcome/value of each story.
 
+**Progress Indicator**: At the start of this step, output:
+```python
+print(f"Step 5/6: Defining outcomes and aggregating effort...", file=sys.stderr)
+```
+
 **Outcome Format**:
 - **Customer outcome**: What the customer can now do
 - **Business outcome**: Impact on adoption, compliance, deals, etc.
@@ -869,6 +958,20 @@ As a <role>, I want to <action>, so that <value>.
 ### Step 6: Output the Report
 
 **Objective**: Present the structured breakdown.
+
+**Progress Indicator**: At the start of this step, output:
+```python
+print(f"Step 6/6: Generating comprehensive markdown report...", file=sys.stderr)
+```
+
+After completion, output:
+```python
+print(file=sys.stderr)
+print("=" * 70, file=sys.stderr)
+print("✓ ANALYSIS COMPLETE", file=sys.stderr)
+print("=" * 70, file=sys.stderr)
+print(file=sys.stderr)
+```
 
 **Actions**:
 
