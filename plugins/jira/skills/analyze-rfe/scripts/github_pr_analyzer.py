@@ -79,35 +79,51 @@ class GitHubPRAnalyzer:
         Returns:
             List of PR summaries sorted by relevance
         """
-        # Build search query
-        query_parts = [f'"{kw}"' for kw in keywords[:3]]  # Limit to 3 keywords
-        query = " OR ".join(query_parts) if query_parts else ""
-
-        if not query:
+        if not keywords:
             return []
 
-        # Search merged PRs
-        pr_data = self._run_gh_command(
-            ["search", "prs",
-             "--repo", repo_name,
-             "--state", "merged",
-             "--sort", "updated",
-             "--limit", str(max_results),
-             "--json", "number,title,url,body,mergedAt,additions,deletions,changedFiles",
-             query],
-            cache_key=f"pr_search_{repo_name.replace('/', '_')}_{hash(query) % 10000}"
-        )
+        # gh search prs doesn't support OR queries well, so search for each keyword
+        # separately and merge results
+        all_prs = {}  # Use dict to deduplicate by PR number
 
-        if not pr_data:
+        # Search for top 3 keywords individually
+        for keyword in keywords[:3]:
+            if not keyword or len(keyword) < 2:
+                continue
+
+            # Search merged PRs for this keyword
+            # Note: gh search prs uses --merged flag, not --state merged
+            # Only basic fields are available in search results (closedAt, not mergedAt)
+            # Query must come first before flags
+            pr_data = self._run_gh_command(
+                ["search", "prs", keyword,
+                 "--repo", repo_name,
+                 "--merged",
+                 "--sort", "updated",
+                 "--limit", str(max_results),
+                 "--json", "number,title,url,body,closedAt"],
+                cache_key=f"pr_search_{repo_name.replace('/', '_')}_{keyword}_{max_results}"
+            )
+
+            if pr_data:
+                try:
+                    prs = json.loads(pr_data)
+                    for pr in prs:
+                        pr_num = pr.get("number")
+                        if pr_num and pr_num not in all_prs:
+                            all_prs[pr_num] = pr
+                except json.JSONDecodeError:
+                    continue
+
+        # Convert back to list
+        prs = list(all_prs.values())
+
+        if not prs:
             return []
 
-        try:
-            prs = json.loads(pr_data)
-            # Rank by relevance
-            ranked_prs = self._rank_prs_by_relevance(prs, keywords)
-            return ranked_prs[:max_results]
-        except json.JSONDecodeError:
-            return []
+        # Rank by relevance using all keywords
+        ranked_prs = self._rank_prs_by_relevance(prs, keywords)
+        return ranked_prs[:max_results]
 
     def _rank_prs_by_relevance(self, prs: List[Dict], keywords: List[str]) -> List[Dict]:
         """
@@ -134,21 +150,19 @@ class GitHubPRAnalyzer:
                 if kw_lower in body:
                     score += 3
 
-            # Recency bonus
-            merged_at = pr.get("mergedAt")
-            if merged_at:
+            # Recency bonus (use closedAt since mergedAt not available in search)
+            closed_at = pr.get("closedAt")
+            if closed_at:
                 try:
-                    merged_date = datetime.fromisoformat(merged_at.replace('Z', '+00:00'))
-                    six_months_ago = datetime.now(merged_date.tzinfo) - timedelta(days=180)
-                    if merged_date > six_months_ago:
+                    closed_date = datetime.fromisoformat(closed_at.replace('Z', '+00:00'))
+                    six_months_ago = datetime.now(closed_date.tzinfo) - timedelta(days=180)
+                    if closed_date > six_months_ago:
                         score += 5
                 except (ValueError, TypeError):
                     pass
 
-            # Complexity penalty (very large PRs may be less relevant)
-            changed_files = pr.get("changedFiles", 0)
-            if changed_files > 20:
-                score -= 2
+            # Note: changedFiles not available in search results, would need pr view for that
+            # Skip complexity penalty in initial search ranking
 
             pr["relevance_score"] = score
             scored_prs.append(pr)
@@ -345,6 +359,205 @@ class GitHubPRAnalyzer:
             return "L"
         else:
             return "XL"
+
+    def search_related_bugs(self, component: str, keywords: List[str], max_results: int = 10) -> List[Dict]:
+        """
+        Search Jira for closed bugs that provide lessons learned
+
+        Args:
+            component: Component name (e.g., "cert-manager")
+            keywords: Keywords from RFE
+            max_results: Maximum bugs to return
+
+        Returns:
+            List of bugs with extracted patterns and lessons
+        """
+        try:
+            # Import JiraClient from fetch_rfe
+            from pathlib import Path
+            import sys
+            scripts_dir = Path(__file__).parent
+            sys.path.insert(0, str(scripts_dir))
+            from fetch_rfe import JiraClient
+
+            client = JiraClient()
+
+            # Build JQL for closed bugs with lessons
+            # Use top 3 keywords to avoid query too long
+            # Filter out keywords with special characters that break JQL
+            valid_keywords = [
+                kw for kw in keywords[:5]
+                if kw and not kw.startswith("--") and len(kw) > 2 and kw.replace("-", "").replace("_", "").isalnum()
+            ]
+
+            if not valid_keywords:
+                return []
+
+            keyword_clauses = " OR ".join([f'text ~ "{kw}"' for kw in valid_keywords[:3]])
+
+            # Build component filter - try different component field formats
+            component_filter = f'component = "{component}"'
+
+            jql = f'''
+                project = OCPBUGS AND
+                {component_filter} AND
+                status = Closed AND
+                created >= -12M AND
+                ({keyword_clauses})
+                ORDER BY priority DESC, created DESC
+            '''
+
+            # Search for bugs
+            try:
+                result = client.search_issues(
+                    jql,
+                    fields=["key", "summary", "description", "resolution", "labels", "created"],
+                    max_results=max_results
+                )
+
+                bugs = result.get("issues", [])
+
+                # Extract patterns from bugs
+                patterns = []
+                for bug in bugs:
+                    pattern = self._extract_bug_pattern(bug)
+                    if pattern:
+                        patterns.append(pattern)
+
+                return patterns
+
+            except Exception as e:
+                # If component-specific search fails, try without component filter
+                print(f"Warning: Component-specific search failed, trying general search: {e}", file=sys.stderr)
+
+                # Use same filtered keywords
+                if not valid_keywords:
+                    return []
+
+                keyword_clauses_general = " OR ".join([f'text ~ "{kw}"' for kw in valid_keywords[:3]])
+
+                jql_general = f'''
+                    project = OCPBUGS AND
+                    status = Closed AND
+                    created >= -12M AND
+                    ({keyword_clauses_general})
+                    ORDER BY priority DESC, created DESC
+                '''
+
+                result = client.search_issues(
+                    jql_general,
+                    fields=["key", "summary", "description", "resolution", "labels", "created"],
+                    max_results=max_results
+                )
+
+                bugs = result.get("issues", [])
+
+                # Extract patterns
+                patterns = []
+                for bug in bugs:
+                    pattern = self._extract_bug_pattern(bug)
+                    if pattern:
+                        patterns.append(pattern)
+
+                return patterns
+
+        except ImportError:
+            print("Warning: Could not import JiraClient for bug search", file=sys.stderr)
+            return []
+        except Exception as e:
+            print(f"Warning: Bug pattern search failed: {e}", file=sys.stderr)
+            return []
+
+    def _extract_bug_pattern(self, bug: Dict) -> Optional[Dict]:
+        """
+        Extract reusable lessons from bug description
+
+        Args:
+            bug: Jira bug dict
+
+        Returns:
+            Pattern dict or None if no useful lesson found
+        """
+        fields = bug.get("fields", {})
+        summary = fields.get("summary", "")
+        description = fields.get("description", "") or ""
+
+        # Look for lesson indicators
+        lesson_indicators = [
+            "avoid",
+            "ensure",
+            "must not",
+            "regression",
+            "race condition",
+            "deadlock",
+            "memory leak",
+            "security",
+            "vulnerability",
+            "edge case",
+            "corner case",
+            "fails when",
+            "breaks when",
+            "should not",
+            "causing",
+            "root cause"
+        ]
+
+        # Check if bug has useful lessons
+        text_combined = (summary + " " + description).lower()
+        has_lesson = any(indicator in text_combined for indicator in lesson_indicators)
+
+        if not has_lesson:
+            return None
+
+        # Extract lesson text (first relevant paragraph)
+        lesson_text = self._extract_lesson_text(description)
+
+        return {
+            "bug_key": bug.get("key"),
+            "summary": summary,
+            "resolution": fields.get("resolution", {}).get("name", "Fixed") if fields.get("resolution") else "Fixed",
+            "labels": [label for label in fields.get("labels", [])],
+            "created": fields.get("created", ""),
+            "lesson": lesson_text,
+            "url": f"https://issues.redhat.com/browse/{bug.get('key')}"
+        }
+
+    def _extract_lesson_text(self, description: str) -> str:
+        """
+        Extract the most relevant lesson paragraph from bug description
+
+        Args:
+            description: Bug description text
+
+        Returns:
+            Extracted lesson text (max 500 chars)
+        """
+        if not description:
+            return ""
+
+        # Split into paragraphs
+        paragraphs = [p.strip() for p in description.split('\n\n') if p.strip()]
+
+        # Find paragraph with lesson indicators
+        lesson_indicators = [
+            "root cause",
+            "avoid",
+            "ensure",
+            "should",
+            "must",
+            "regression",
+            "fix",
+            "solution"
+        ]
+
+        for para in paragraphs:
+            para_lower = para.lower()
+            if any(indicator in para_lower for indicator in lesson_indicators):
+                # Return first 500 chars of this paragraph
+                return para[:500] if len(para) > 500 else para
+
+        # No specific lesson found, return first paragraph
+        return paragraphs[0][:500] if paragraphs else ""
 
 
 def main():

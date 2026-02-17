@@ -215,22 +215,20 @@ class OperandDiscovery:
         operands = []
 
         # Pattern 1: "manages X, Y, and Z" or "manages and updates X"
-        manages_pattern = r'manages?\s+(?:and\s+\w+\s+)?(?:the\s+)?(.+?)(?:stack|deployed|on|$)'
+        # More specific: 1-3 hyphenated words, stop at punctuation
+        manages_pattern = r'manages?\s+(?:the\s+)?([a-z][a-z0-9-]+(?:\s+[a-z][a-z0-9-]+){0,2})(?:\s+stack|\s+deployed|\s+on|,|\.|\s+and\s+|$)'
         matches = re.findall(manages_pattern, readme_text, re.IGNORECASE)
         for match in matches:
             # Remove markdown links but keep the text
             match = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', match)
-            # Extract component names
-            components = re.split(r'[,\n]', match)
-            for comp in components:
-                comp = comp.strip()
-                comp = re.sub(r'\s*\(.*?\)\s*', '', comp)  # Remove parenthetical
-                comp = re.sub(r'\*+', '', comp)  # Remove markdown bold
-                if self._is_valid_operand_name(comp):
-                    operands.append({
-                        "name": comp,
-                        "source": "README (manages pattern)"
-                    })
+            comp = match.strip()
+            comp = re.sub(r'\s*\(.*?\)\s*', '', comp)  # Remove parenthetical
+            comp = re.sub(r'\*+', '', comp)  # Remove markdown bold
+            if self._is_valid_operand_name(comp):
+                operands.append({
+                    "name": comp,
+                    "source": "README (manages pattern)"
+                })
 
         # Pattern 2: "deploys X"
         deploys_pattern = r'deploys?\s+(?:the\s+)?([a-zA-Z0-9-]+)'
@@ -256,8 +254,9 @@ class OperandDiscovery:
                     })
 
         # Pattern 4: Markdown list items with component names
-        # Matches: * [Prometheus](url) or * Prometheus
-        list_pattern = r'^\s*[\*\-]\s+\[?([A-Z][a-zA-Z0-9_-]+)\]?\(?'
+        # Only match technical component names (hyphenated, lowercase after first char)
+        # Rejects single words like "Manager", "Support", "When"
+        list_pattern = r'^\s*[\*\-]\s+\[?([A-Z][a-z]+(?:-[a-z]+)+)\]?\(?'
         for line in readme_text.split('\n'):
             match = re.match(list_pattern, line)
             if match:
@@ -378,15 +377,42 @@ class OperandDiscovery:
 
         # Exclude common words that aren't operands
         exclude_words = [
+            # Original exclude words
             "the", "and", "or", "for", "with", "operator", "openshift",
             "kubernetes", "cluster", "version", "release", "image",
             "container", "pod", "deployment", "service", "namespace",
             "based", "platform", "stack", "component", "monitoring",
-            "github", "coreos"
+            "github", "coreos",
+            # Common false positives from recent runs
+            "this", "when", "being", "management", "support", "enables",
+            "centralizes", "make", "run", "access", "fork", "manager",
+            "controller", "system", "infrastructure", "resource",
+            # Gerunds and verbs
+            "managing", "deploying", "running", "supporting", "monitoring"
         ]
         if name in exclude_words:
             return False
 
+        return True
+
+    def _is_likely_operand_repo(self, repo_data: Dict) -> bool:
+        """
+        Check if repo is likely an actual operand, not random match
+
+        Args:
+            repo_data: Repository information dict
+
+        Returns:
+            True if repo appears to be a real operand
+        """
+        description = repo_data.get("description", "").lower()
+
+        # Exclude repos that are clearly not operands
+        exclude_keywords = ["documentation", "example", "test", "tutorial", "runbook", "template"]
+        if any(kw in description for kw in exclude_keywords):
+            return False
+
+        # If description is empty, still consider it (many repos have no description)
         return True
 
     def enrich_with_repositories(self, operands: List[Dict], org: str = "openshift") -> List[Dict]:
@@ -429,12 +455,14 @@ class OperandDiscovery:
                 if repo_data:
                     try:
                         repo_info = json.loads(repo_data)
-                        repo_found = {
-                            "name": pattern,
-                            "url": repo_info.get("url"),
-                            "description": repo_info.get("description", "")
-                        }
-                        break
+                        # Validate that this is likely a real operand
+                        if self._is_likely_operand_repo(repo_info):
+                            repo_found = {
+                                "name": pattern,
+                                "url": repo_info.get("url"),
+                                "description": repo_info.get("description", "")
+                            }
+                            break
                     except json.JSONDecodeError:
                         continue
 

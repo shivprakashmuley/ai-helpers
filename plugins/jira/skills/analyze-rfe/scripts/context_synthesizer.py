@@ -24,7 +24,10 @@ class ContextSynthesizer:
         upstream_pr_insights: List[Dict] = None,
         upstream_adrs: List[Dict] = None,
         is_operator: bool = False,
-        operands: List[Dict] = None
+        operands: List[Dict] = None,
+        rfe_related_files: Dict = None,
+        bug_patterns: List[Dict] = None,
+        dependencies: Dict = None
     ) -> str:
         """
         Generate comprehensive component context in markdown
@@ -41,6 +44,9 @@ class ContextSynthesizer:
             upstream_adrs: Upstream ADRs (optional)
             is_operator: Whether this is an operator (optional)
             operands: List of operand analysis results (optional)
+            rfe_related_files: RFE-specific code files (Phase 2)
+            bug_patterns: Related bug patterns and lessons (Phase 2)
+            dependencies: Dependency analysis results (Phase 2)
 
         Returns:
             Markdown formatted component context
@@ -60,6 +66,14 @@ class ContextSynthesizer:
         if is_operator and operands:
             sections.append(self._format_operands(operands))
 
+        # RFE-Specific Code Files (Phase 2)
+        if rfe_related_files and any(rfe_related_files.values()):
+            sections.append(self._format_rfe_related_files(rfe_related_files))
+
+        # Dependencies (Phase 2)
+        if dependencies and (dependencies.get("dependencies") or dependencies.get("risks")):
+            sections.append(self._format_dependencies(dependencies))
+
         # Key Implementation Patterns
         if pr_insights:
             sections.append(self._format_implementation_patterns(pr_insights, structure_data))
@@ -67,6 +81,10 @@ class ContextSynthesizer:
         # Critical Code Paths
         if structure_data.get("key_packages"):
             sections.append(self._format_code_paths(structure_data))
+
+        # Bug Patterns and Lessons (Phase 2)
+        if bug_patterns:
+            sections.append(self._format_bug_patterns(bug_patterns))
 
         # Historical Context
         if pr_insights or adrs or lessons:
@@ -84,7 +102,7 @@ class ContextSynthesizer:
             ))
 
         # Risk Factors
-        sections.append(self._format_risk_factors(structure_data, pr_insights, lessons))
+        sections.append(self._format_risk_factors(structure_data, pr_insights, lessons, dependencies))
 
         # Recommended Approach
         sections.append(self._format_recommended_approach(
@@ -342,7 +360,7 @@ class ContextSynthesizer:
 
         return "\n".join(lines)
 
-    def _format_risk_factors(self, structure_data: Dict, pr_insights: List[Dict], lessons: List[Dict]) -> str:
+    def _format_risk_factors(self, structure_data: Dict, pr_insights: List[Dict], lessons: List[Dict], dependencies: Dict = None) -> str:
         """Format risk factors"""
         lines = ["**Risk Factors**:"]
 
@@ -376,9 +394,14 @@ class ContextSynthesizer:
                 "mitigation": "Verify API contracts and handle failures gracefully"
             })
 
+        # Dependency risks (Phase 2)
+        if dependencies and dependencies.get("risks"):
+            for dep_risk in dependencies["risks"][:2]:  # Add top 2 dependency risks
+                risks.append(dep_risk)
+
         # Format risks
         if risks:
-            for risk in risks[:3]:
+            for risk in risks[:5]:  # Increased from 3 to 5 to accommodate dependency risks
                 lines.append(f"- **{risk['type']}**: {risk['description']}")
                 lines.append(f"  - **Mitigation**: {risk['mitigation']}")
         else:
@@ -512,6 +535,117 @@ class ContextSynthesizer:
             lines.append("- Avoid: Diverging significantly from upstream without strong justification")
 
         return "\n".join(lines)
+
+    def _format_rfe_related_files(self, rfe_related_files: Dict) -> str:
+        """Format RFE-specific code files (Phase 2)"""
+        lines = ["**RFE-Specific Code Files**:\n"]
+
+        has_content = False
+
+        # Flag definitions
+        if rfe_related_files.get("flag_definitions"):
+            lines.append("*Flag Definitions*:")
+            for item in rfe_related_files["flag_definitions"][:5]:
+                lines.append(f"- `{item['flag']}` in [{item['file']}]({item['url']})")
+            lines.append("")
+            has_content = True
+
+        # CRD definitions
+        if rfe_related_files.get("crd_definitions"):
+            lines.append("*CRD Definitions*:")
+            for item in rfe_related_files["crd_definitions"][:5]:
+                lines.append(f"- `{item['crd']}` in [{item['file']}]({item['url']})")
+            lines.append("")
+            has_content = True
+
+        # Config files
+        if rfe_related_files.get("config_files"):
+            lines.append("*Configuration Files*:")
+            for item in rfe_related_files["config_files"][:5]:
+                lines.append(f"- [{item['file']}]({item['url']})")
+            lines.append("")
+            has_content = True
+
+        # Controller files
+        if rfe_related_files.get("controller_files"):
+            lines.append("*Controller Files*:")
+            for item in rfe_related_files["controller_files"][:5]:
+                lines.append(f"- [{item['file']}]({item['url']})")
+            lines.append("")
+            has_content = True
+
+        # Test files
+        if rfe_related_files.get("test_files"):
+            lines.append("*Related Test Files*:")
+            for item in rfe_related_files["test_files"][:5]:
+                lines.append(f"- [{item['file']}]({item['url']})")
+            lines.append("")
+            has_content = True
+
+        if not has_content:
+            return ""
+
+        return "\n".join(lines) + "\n"
+
+    def _format_bug_patterns(self, bug_patterns: List[Dict]) -> str:
+        """Format bug patterns and lessons (Phase 2)"""
+        if not bug_patterns:
+            return ""
+
+        lines = ["**Lessons from Related Bugs**:\n"]
+
+        for pattern in bug_patterns[:5]:
+            bug_key = pattern.get("bug_key", "")
+            summary = pattern.get("summary", "")
+            lesson = pattern.get("lesson", "")
+            url = pattern.get("url", "")
+
+            lines.append(f"- [{bug_key}]({url}): {summary}")
+            if lesson:
+                # Truncate lesson to first 200 chars
+                lesson_short = lesson[:200] + "..." if len(lesson) > 200 else lesson
+                lines.append(f"  - *Lesson*: {lesson_short}")
+
+        return "\n".join(lines) + "\n"
+
+    def _format_dependencies(self, dependencies: Dict) -> str:
+        """Format dependency analysis (Phase 2)"""
+        lines = ["**Dependency Analysis**:\n"]
+
+        # Show total dependencies count
+        all_deps = dependencies.get("dependencies", [])
+        if all_deps:
+            lines.append(f"*Total Dependencies*: {len(all_deps)}\n")
+
+        # Show risks
+        risks = dependencies.get("risks", [])
+        if risks:
+            lines.append("*Identified Risks*:")
+            for risk in risks:
+                risk_type = risk.get("type", "")
+                severity = risk.get("severity", "medium")
+                description = risk.get("description", "")
+                mitigation = risk.get("mitigation", "")
+
+                severity_icon = "🔴" if severity == "high" else "🟡"
+                lines.append(f"- {severity_icon} **{risk_type}**: {description}")
+                if mitigation:
+                    lines.append(f"  - *Mitigation*: {mitigation}")
+
+            lines.append("")
+
+        # Show recommendations
+        recommendations = dependencies.get("recommendations", [])
+        if recommendations:
+            lines.append("*Recommendations*:")
+            for rec in recommendations[:5]:
+                rec_type = rec.get("type", "")
+                recommendation = rec.get("recommendation", "")
+                lines.append(f"- **{rec_type}**: {recommendation}")
+
+            lines.append("")
+
+        return "\n".join(lines) + "\n"
 
     # Helper methods
 

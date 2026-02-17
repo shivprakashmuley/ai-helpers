@@ -545,6 +545,395 @@ class GitHubRepoAnalyzer:
 
         return {}
 
+    def find_rfe_related_files(self, repo_name: str, rfe_keywords: List[str]) -> Dict:
+        """
+        Find files related to RFE by searching code for specific patterns
+
+        Args:
+            repo_name: Repository name
+            rfe_keywords: Keywords from RFE description
+
+        Returns:
+            Dict with categorized file findings
+        """
+        results = {
+            "flag_definitions": [],
+            "crd_definitions": [],
+            "config_files": [],
+            "controller_files": [],
+            "test_files": []
+        }
+
+        # Extract different types of keywords
+        flags = [kw for kw in rfe_keywords if kw.startswith("--")]
+        crds = [kw for kw in rfe_keywords if kw and kw[0].isupper() and kw.replace("-", "").replace("_", "").isalnum()]
+
+        # Search for flag definitions
+        for flag in flags[:5]:  # Limit to 5 flags
+            flag_clean = flag.lstrip("-")
+            # Search for flag definition patterns in Go code
+            flag_results = self._search_code_for_pattern(
+                repo_name,
+                f'"{flag_clean}"',
+                file_extensions=["go"],
+                max_results=5
+            )
+            if flag_results:
+                results["flag_definitions"].extend([
+                    {
+                        "flag": flag,
+                        "file": r["path"],
+                        "url": r.get("url", f"https://github.com/{repo_name}/blob/main/{r['path']}")
+                    }
+                    for r in flag_results
+                ])
+
+        # Search for CRD definitions
+        for crd in crds[:5]:  # Limit to 5 CRDs
+            # Search in CRD directories
+            crd_results = self._search_code_for_pattern(
+                repo_name,
+                crd,
+                paths=["config/crd", "api", "pkg/apis"],
+                max_results=3
+            )
+            if crd_results:
+                results["crd_definitions"].extend([
+                    {
+                        "crd": crd,
+                        "file": r["path"],
+                        "url": r.get("url", f"https://github.com/{repo_name}/blob/main/{r['path']}")
+                    }
+                    for r in crd_results
+                ])
+
+        # Search for config-related files based on general keywords
+        config_keywords = [kw for kw in rfe_keywords if len(kw) > 3 and not kw.startswith("--")][:3]
+        for keyword in config_keywords:
+            config_results = self._search_code_for_pattern(
+                repo_name,
+                keyword,
+                paths=["config", "pkg/config"],
+                file_extensions=["go", "yaml", "yml"],
+                max_results=3
+            )
+            if config_results:
+                results["config_files"].extend([
+                    {
+                        "keyword": keyword,
+                        "file": r["path"],
+                        "url": r.get("url", f"https://github.com/{repo_name}/blob/main/{r['path']}")
+                    }
+                    for r in config_results
+                ])
+
+        # Search for controller files
+        controller_keywords = [kw for kw in rfe_keywords if len(kw) > 3][:3]
+        for keyword in controller_keywords:
+            controller_results = self._search_code_for_pattern(
+                repo_name,
+                keyword,
+                paths=["pkg/controller", "controllers"],
+                file_extensions=["go"],
+                max_results=3
+            )
+            if controller_results:
+                results["controller_files"].extend([
+                    {
+                        "keyword": keyword,
+                        "file": r["path"],
+                        "url": r.get("url", f"https://github.com/{repo_name}/blob/main/{r['path']}")
+                    }
+                    for r in controller_results
+                ])
+
+        # Search for test files
+        test_keywords = [kw for kw in rfe_keywords if len(kw) > 3][:3]
+        for keyword in test_keywords:
+            test_results = self._search_code_for_pattern(
+                repo_name,
+                keyword,
+                paths=["test", "pkg"],
+                file_extensions=["go"],
+                filename_contains="_test.go",
+                max_results=3
+            )
+            if test_results:
+                results["test_files"].extend([
+                    {
+                        "keyword": keyword,
+                        "file": r["path"],
+                        "url": r.get("url", f"https://github.com/{repo_name}/blob/main/{r['path']}")
+                    }
+                    for r in test_results
+                ])
+
+        # Deduplicate results in each category
+        for category in results:
+            seen_files = set()
+            unique_results = []
+            for item in results[category]:
+                file_path = item.get("file")
+                if file_path and file_path not in seen_files:
+                    seen_files.add(file_path)
+                    unique_results.append(item)
+            results[category] = unique_results
+
+        return results
+
+    def _search_code_for_pattern(
+        self,
+        repo_name: str,
+        pattern: str,
+        paths: Optional[List[str]] = None,
+        file_extensions: Optional[List[str]] = None,
+        filename_contains: Optional[str] = None,
+        max_results: int = 5
+    ) -> List[Dict]:
+        """
+        Search code for a pattern using gh search code
+
+        Args:
+            repo_name: Repository name
+            pattern: Search pattern
+            paths: Optional list of paths to search in
+            file_extensions: Optional list of file extensions to filter
+            filename_contains: Optional filename pattern
+            max_results: Maximum results to return
+
+        Returns:
+            List of matching files with paths
+        """
+        # Build search query
+        query_parts = [pattern]
+
+        # Add repo restriction
+        query_parts.append(f"repo:{repo_name}")
+
+        # Add path restrictions
+        if paths:
+            path_query = " OR ".join([f"path:{p}" for p in paths])
+            query_parts.append(f"({path_query})")
+
+        # Add extension filter
+        if file_extensions:
+            ext_query = " OR ".join([f"extension:{ext}" for ext in file_extensions])
+            query_parts.append(f"({ext_query})")
+
+        # Add filename filter
+        if filename_contains:
+            query_parts.append(f"filename:{filename_contains}")
+
+        query = " ".join(query_parts)
+
+        # Execute search
+        search_data = self._run_gh_command(
+            ["search", "code", query, "--limit", str(max_results), "--json", "path,url"],
+            cache_key=f"code_search_{repo_name.replace('/', '_')}_{hash(query) % 100000}"
+        )
+
+        if not search_data:
+            return []
+
+        try:
+            results = json.loads(search_data)
+            return results if isinstance(results, list) else []
+        except json.JSONDecodeError:
+            return []
+
+    def analyze_dependencies(self, repo_name: str, rfe_keywords: List[str]) -> Dict:
+        """
+        Analyze go.mod or package.json for dependencies relevant to RFE
+
+        Args:
+            repo_name: Repository name
+            rfe_keywords: Keywords from RFE to identify relevant dependencies
+
+        Returns:
+            Dict with dependencies and identified risks
+        """
+        result = {
+            "dependencies": [],
+            "risks": [],
+            "recommendations": []
+        }
+
+        # Try to fetch go.mod
+        gomod = self._run_gh_command(
+            ["api", f"repos/{repo_name}/contents/go.mod", "--jq", ".content"],
+            cache_key=f"gomod_deps_{repo_name.replace('/', '_')}"
+        )
+
+        if gomod:
+            result = self._analyze_go_dependencies(gomod, rfe_keywords, repo_name)
+        else:
+            # Try package.json for Node.js projects
+            packagejson = self._run_gh_command(
+                ["api", f"repos/{repo_name}/contents/package.json", "--jq", ".content"],
+                cache_key=f"packagejson_deps_{repo_name.replace('/', '_')}"
+            )
+
+            if packagejson:
+                result = self._analyze_node_dependencies(packagejson, rfe_keywords, repo_name)
+
+        return result
+
+    def _analyze_go_dependencies(self, gomod_base64: str, rfe_keywords: List[str], repo_name: str) -> Dict:
+        """Analyze Go dependencies from go.mod"""
+        import base64
+        import re
+
+        result = {
+            "dependencies": [],
+            "risks": [],
+            "recommendations": []
+        }
+
+        try:
+            # Decode base64 content
+            content = base64.b64decode(gomod_base64.strip()).decode('utf-8')
+        except Exception as e:
+            print(f"Warning: Failed to decode go.mod: {e}", file=sys.stderr)
+            return result
+
+        # Parse dependencies
+        deps = {}
+        for line in content.split('\n'):
+            line = line.strip()
+            # Match: github.com/org/repo v1.2.3
+            match = re.match(r'^\s*(github\.com/[^\s]+|k8s\.io/[^\s]+|go\.opentelemetry\.io/[^\s]+)\s+v?([^\s]+)', line)
+            if match:
+                dep_path, version = match.groups()
+                deps[dep_path] = version
+
+        # Store all dependencies
+        result["dependencies"] = [{"path": k, "version": v} for k, v in deps.items()]
+
+        # Identify risks based on RFE keywords
+        keywords_lower = [kw.lower() for kw in rfe_keywords]
+
+        # Check for AWS dependencies
+        if any("aws" in kw for kw in keywords_lower):
+            aws_deps = {k: v for k, v in deps.items() if "aws" in k.lower()}
+            if aws_deps:
+                result["risks"].append({
+                    "type": "AWS SDK Dependency",
+                    "severity": "medium",
+                    "dependencies": list(aws_deps.keys()),
+                    "description": f"Uses AWS SDK: {', '.join(aws_deps.keys())}",
+                    "mitigation": "Ensure FIPS-compliant AWS SDK version for GA. Verify AWS SDK supports required features."
+                })
+
+        # Check for Azure dependencies
+        if any("azure" in kw for kw in keywords_lower):
+            azure_deps = {k: v for k, v in deps.items() if "azure" in k.lower()}
+            if azure_deps:
+                result["risks"].append({
+                    "type": "Azure SDK Dependency",
+                    "severity": "medium",
+                    "dependencies": list(azure_deps.keys()),
+                    "description": f"Uses Azure SDK: {', '.join(azure_deps.keys())}",
+                    "mitigation": "Verify Azure SDK version compatibility with OpenShift supported Azure regions"
+                })
+
+        # Check for GCP dependencies
+        if any("gcp" in kw or "google" in kw for kw in keywords_lower):
+            gcp_deps = {k: v for k, v in deps.items() if "google" in k.lower() and "cloud" in k.lower()}
+            if gcp_deps:
+                result["risks"].append({
+                    "type": "GCP SDK Dependency",
+                    "severity": "medium",
+                    "dependencies": list(gcp_deps.keys()),
+                    "description": f"Uses GCP SDK: {', '.join(gcp_deps.keys())}",
+                    "mitigation": "Verify GCP SDK version compatibility and authentication methods"
+                })
+
+        # Check for Kubernetes version dependencies
+        k8s_deps = {k: v for k, v in deps.items() if "k8s.io" in k}
+        if k8s_deps:
+            # Check for version mismatches or outdated versions
+            for dep_path, version in k8s_deps.items():
+                # Extract version number (e.g., "v0.28.0" -> "0.28")
+                version_match = re.match(r'v?(\d+)\.(\d+)', version)
+                if version_match:
+                    major, minor = version_match.groups()
+                    k8s_version = f"{major}.{minor}"
+
+                    result["recommendations"].append({
+                        "type": "Kubernetes Version",
+                        "dependency": dep_path,
+                        "current_version": version,
+                        "recommendation": f"Ensure k8s.io dependencies match OpenShift supported Kubernetes version"
+                    })
+
+        # Check for security-related dependencies if RFE mentions security
+        if any(kw in ["security", "auth", "certificate", "tls", "encrypt"] for kw in keywords_lower):
+            crypto_deps = {k: v for k, v in deps.items() if any(term in k.lower() for term in ["crypto", "tls", "cert", "auth", "oauth"])}
+            if crypto_deps:
+                result["risks"].append({
+                    "type": "Cryptography/Security Dependencies",
+                    "severity": "high",
+                    "dependencies": list(crypto_deps.keys()),
+                    "description": "Security-sensitive dependencies detected",
+                    "mitigation": "Ensure FIPS compliance, verify TLS versions (1.2+), review for known CVEs"
+                })
+
+        # Check for database dependencies
+        db_keywords = ["database", "sql", "postgres", "mysql", "redis", "etcd"]
+        if any(kw in keywords_lower for kw in db_keywords):
+            db_deps = {k: v for k, v in deps.items() if any(db in k.lower() for db in ["sql", "postgres", "mysql", "redis", "etcd", "mongo"])}
+            if db_deps:
+                result["recommendations"].append({
+                    "type": "Database Dependencies",
+                    "dependencies": list(db_deps.keys()),
+                    "recommendation": "Verify database client version compatibility and connection pooling settings"
+                })
+
+        return result
+
+    def _analyze_node_dependencies(self, packagejson_base64: str, rfe_keywords: List[str], repo_name: str) -> Dict:
+        """Analyze Node.js dependencies from package.json"""
+        import base64
+
+        result = {
+            "dependencies": [],
+            "risks": [],
+            "recommendations": []
+        }
+
+        try:
+            # Decode base64 content
+            content = base64.b64decode(packagejson_base64.strip()).decode('utf-8')
+            package_data = json.loads(content)
+        except Exception as e:
+            print(f"Warning: Failed to parse package.json: {e}", file=sys.stderr)
+            return result
+
+        # Extract dependencies
+        deps = package_data.get("dependencies", {})
+        dev_deps = package_data.get("devDependencies", {})
+
+        # Store all dependencies
+        all_deps = {**deps, **dev_deps}
+        result["dependencies"] = [{"name": k, "version": v} for k, v in all_deps.items()]
+
+        # Similar risk analysis for Node.js dependencies
+        keywords_lower = [kw.lower() for kw in rfe_keywords]
+
+        # Check for AWS SDK
+        if any("aws" in kw for kw in keywords_lower):
+            aws_deps = {k: v for k, v in all_deps.items() if "aws-sdk" in k.lower() or "@aws-sdk" in k.lower()}
+            if aws_deps:
+                result["risks"].append({
+                    "type": "AWS SDK Dependency",
+                    "severity": "medium",
+                    "dependencies": list(aws_deps.keys()),
+                    "description": f"Uses AWS SDK for JavaScript/Node.js",
+                    "mitigation": "Verify AWS SDK version and feature compatibility"
+                })
+
+        return result
+
 
 def main():
     """Test the analyzer"""

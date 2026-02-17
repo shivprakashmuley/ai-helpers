@@ -69,6 +69,9 @@ class ComponentContextGatherer:
             "pr_insights": [],
             "adrs": [],
             "lessons": [],
+            "rfe_related_files": {},  # Phase 2
+            "bug_patterns": [],        # Phase 2
+            "dependencies": {},        # Phase 2
             "markdown": ""
         }
 
@@ -98,108 +101,173 @@ class ComponentContextGatherer:
         context["is_operator"] = is_operator
 
         if is_operator:
-            self._log("Step 2.5: Discovered this is an Operator, checking for operands...")
-            operands = self.operand_discovery.discover_operands(downstream_repo)
+            try:
+                self._log("Step 2.5: Discovered this is an Operator, checking for operands...")
+                operands = self.operand_discovery.discover_operands(downstream_repo)
 
-            if operands:
-                self._log(f"Found {len(operands)} potential operand(s)")
+                if operands:
+                    self._log(f"Found {len(operands)} potential operand(s)")
 
-                # Enrich with repository info
-                operands_enriched = self.operand_discovery.enrich_with_repositories(operands)
+                    # Enrich with repository info
+                    operands_enriched = self.operand_discovery.enrich_with_repositories(operands)
 
-                # Filter to only those with repositories
-                operands_with_repos = [o for o in operands_enriched if o.get("repository")]
+                    # Filter to only those with repositories
+                    operands_with_repos = [o for o in operands_enriched if o.get("repository")]
 
-                if operands_with_repos:
-                    self._log(f"Found {len(operands_with_repos)} operand(s) with repositories")
+                    if operands_with_repos:
+                        self._log(f"Found {len(operands_with_repos)} operand(s) with repositories")
 
-                    # Decide whether to analyze operands
-                    should_analyze_operands = analyze_operands
+                        # Decide whether to analyze operands
+                        should_analyze_operands = analyze_operands
 
-                    if should_analyze_operands is None and interactive:
-                        should_analyze_operands = self._ask_user_for_operand_analysis(
-                            component_name,
-                            operands_with_repos
-                        )
-
-                    if should_analyze_operands:
-                        context["operands"] = []
-
-                        for operand in operands_with_repos:
-                            operand_name = operand.get("name")
-                            operand_repo = operand["repository"]["name"]
-
-                            self._log(f"  Analyzing operand: {operand_name} ({operand_repo})")
-
-                            # Analyze operand repository (subset of full analysis)
-                            operand_context = self._analyze_operand(
-                                operand_name,
-                                operand_repo,
-                                rfe_keywords,
-                                max_prs=5,  # Fewer PRs for operands
-                                deep_dive_prs=2
+                        if should_analyze_operands is None and interactive:
+                            should_analyze_operands = self._ask_user_for_operand_analysis(
+                                component_name,
+                                operands_with_repos
                             )
 
-                            context["operands"].append({
-                                "name": operand_name,
-                                "source": operand.get("source"),
-                                "repository": operand["repository"],
-                                "context": operand_context
-                            })
+                        if should_analyze_operands:
+                            context["operands"] = []
 
-                        self._log(f"  Analyzed {len(context['operands'])} operand(s)")
+                            for operand in operands_with_repos:
+                                operand_name = operand.get("name")
+                                operand_repo = operand["repository"]["name"]
+
+                                self._log(f"  Analyzing operand: {operand_name} ({operand_repo})")
+
+                                try:
+                                    # Analyze operand repository (subset of full analysis)
+                                    operand_context = self._analyze_operand(
+                                        operand_name,
+                                        operand_repo,
+                                        rfe_keywords,
+                                        max_prs=5,  # Fewer PRs for operands
+                                        deep_dive_prs=2
+                                    )
+
+                                    context["operands"].append({
+                                        "name": operand_name,
+                                        "source": operand.get("source"),
+                                        "repository": operand["repository"],
+                                        "context": operand_context
+                                    })
+                                except Exception as e:
+                                    self._log(f"  Warning: Failed to analyze operand {operand_name}: {e}")
+
+                            self._log(f"  Analyzed {len(context['operands'])} operand(s)")
+                        else:
+                            self._log("  Skipping operand analysis (user declined or not requested)")
                     else:
-                        self._log("  Skipping operand analysis (user declined or not requested)")
+                        self._log("  No operands with discoverable repositories")
                 else:
-                    self._log("  No operands with discoverable repositories")
-            else:
-                self._log("  No operands discovered")
+                    self._log("  No operands discovered")
+            except Exception as e:
+                self._log(f"Warning: Operand discovery failed: {e}")
 
         # Step 3: Search and analyze PRs (if keywords provided)
         if rfe_keywords:
-            self._log(f"Step 3: Searching PRs with keywords: {rfe_keywords}")
-            prs = self.pr_analyzer.search_relevant_prs(
-                downstream_repo,
-                rfe_keywords,
-                max_results=max_prs
-            )
-            self._log(f"Found {len(prs)} relevant PRs")
+            try:
+                self._log(f"Step 3: Searching PRs with keywords: {rfe_keywords}")
+                prs = self.pr_analyzer.search_relevant_prs(
+                    downstream_repo,
+                    rfe_keywords,
+                    max_results=max_prs
+                )
+                self._log(f"Found {len(prs)} relevant PRs")
 
-            # Analyze top PRs in detail
-            for i, pr in enumerate(prs[:deep_dive_prs]):
-                self._log(f"  Analyzing PR #{pr['number']}: {pr['title']}")
-                pr_details = self.pr_analyzer.analyze_pr_details(downstream_repo, pr['number'])
+                # Analyze top PRs in detail
+                for i, pr in enumerate(prs[:deep_dive_prs]):
+                    try:
+                        self._log(f"  Analyzing PR #{pr['number']}: {pr['title']}")
+                        pr_details = self.pr_analyzer.analyze_pr_details(downstream_repo, pr['number'])
 
-                if pr_details:
-                    insights = self.pr_analyzer.extract_design_insights(pr_details)
-                    effort = self.pr_analyzer.analyze_pr_effort(pr_details)
+                        if pr_details:
+                            insights = self.pr_analyzer.extract_design_insights(pr_details)
+                            effort = self.pr_analyzer.analyze_pr_effort(pr_details)
 
-                    context["pr_insights"].append({
-                        "pr": pr,
-                        "details": pr_details,
-                        "insights": insights,
-                        "effort": effort
-                    })
+                            context["pr_insights"].append({
+                                "pr": pr,
+                                "details": pr_details,
+                                "insights": insights,
+                                "effort": effort
+                            })
+                    except Exception as e:
+                        self._log(f"  Warning: Failed to analyze PR #{pr['number']}: {e}")
+            except Exception as e:
+                self._log(f"Warning: PR search failed: {e}")
         else:
             self._log("Step 3: Skipping PR analysis (no keywords provided)")
 
         # Step 4: Search for ADRs
-        self._log("Step 4: Searching for Architecture Decision Records...")
-        adrs = self.pr_analyzer.search_adrs(downstream_repo)
-        context["adrs"] = adrs
-        if adrs:
-            self._log(f"Found {len(adrs)} ADRs")
+        try:
+            self._log("Step 4: Searching for Architecture Decision Records...")
+            adrs = self.pr_analyzer.search_adrs(downstream_repo)
+            context["adrs"] = adrs
+            if adrs:
+                self._log(f"Found {len(adrs)} ADRs")
+        except Exception as e:
+            self._log(f"Warning: ADR search failed: {e}")
+            context["adrs"] = []
 
         # Step 5: Search for lessons learned
-        self._log("Step 5: Searching for lessons learned...")
-        lessons = self.pr_analyzer.search_lessons_learned_issues(downstream_repo)
-        context["lessons"] = lessons
-        if lessons:
-            self._log(f"Found {len(lessons)} issues with lessons")
+        try:
+            self._log("Step 5: Searching for lessons learned...")
+            lessons = self.pr_analyzer.search_lessons_learned_issues(downstream_repo)
+            context["lessons"] = lessons
+            if lessons:
+                self._log(f"Found {len(lessons)} issues with lessons")
+        except Exception as e:
+            self._log(f"Warning: Lessons search failed: {e}")
+            context["lessons"] = []
+
+        # Step 5.1: Find RFE-specific code files (Phase 2)
+        if rfe_keywords:
+            try:
+                self._log("Step 5.1: Finding RFE-specific code files...")
+                rfe_files = self.repo_analyzer.find_rfe_related_files(downstream_repo, rfe_keywords)
+                context["rfe_related_files"] = rfe_files
+
+                total_files = sum(len(v) for v in rfe_files.values())
+                if total_files > 0:
+                    self._log(f"Found {total_files} RFE-related files")
+            except Exception as e:
+                self._log(f"Warning: RFE file search failed: {e}")
+                context["rfe_related_files"] = {}
+        else:
+            self._log("Step 5.1: Skipping RFE file search (no keywords provided)")
+
+        # Step 5.2: Search for related bug patterns (Phase 2)
+        if rfe_keywords:
+            try:
+                self._log("Step 5.2: Searching for related bug patterns...")
+                bug_patterns = self.pr_analyzer.search_related_bugs(component_name, rfe_keywords)
+                context["bug_patterns"] = bug_patterns
+                if bug_patterns:
+                    self._log(f"Found {len(bug_patterns)} bugs with lessons")
+            except Exception as e:
+                self._log(f"Warning: Bug pattern search failed: {e}")
+                context["bug_patterns"] = []
+        else:
+            self._log("Step 5.2: Skipping bug pattern search (no keywords provided)")
+
+        # Step 5.3: Analyze dependencies (Phase 2)
+        try:
+            self._log("Step 5.3: Analyzing dependencies...")
+            dependencies = self.repo_analyzer.analyze_dependencies(downstream_repo, rfe_keywords or [])
+            context["dependencies"] = dependencies
+
+            dep_count = len(dependencies.get("dependencies", []))
+            risk_count = len(dependencies.get("risks", []))
+            if dep_count > 0:
+                self._log(f"Analyzed {dep_count} dependencies, found {risk_count} risks")
+        except Exception as e:
+            self._log(f"Warning: Dependency analysis failed: {e}")
+            context["dependencies"] = {}
 
         # Step 5.5: Analyze upstream repository (if requested)
-        if repos.get("upstream"):
-            upstream_name = repos["upstream"]["name"]
+        upstream_repo = repos.get("upstream")
+        if upstream_repo and isinstance(upstream_repo, dict) and upstream_repo.get("name"):
+            upstream_name = upstream_repo["name"]
 
             # Decide whether to analyze upstream
             should_analyze_upstream = analyze_upstream
@@ -212,53 +280,60 @@ class ComponentContextGatherer:
                 )
 
             if should_analyze_upstream:
-                self._log(f"Step 5.5: Analyzing upstream repository: {upstream_name}...")
+                try:
+                    self._log(f"Step 5.5: Analyzing upstream repository: {upstream_name}...")
 
-                # Analyze upstream structure
-                self._log("  Analyzing upstream codebase structure...")
-                upstream_structure = self.repo_analyzer.analyze_codebase_structure(upstream_name)
-                context["upstream_structure"] = upstream_structure
-                self._log(f"  Upstream architecture: {upstream_structure.get('architecture', 'Unknown')}")
+                    # Analyze upstream structure
+                    self._log("  Analyzing upstream codebase structure...")
+                    upstream_structure = self.repo_analyzer.analyze_codebase_structure(upstream_name)
+                    context["upstream_structure"] = upstream_structure
+                    self._log(f"  Upstream architecture: {upstream_structure.get('architecture', 'Unknown')}")
 
-                # Search upstream PRs (if keywords provided)
-                if rfe_keywords:
-                    self._log(f"  Searching upstream PRs with keywords: {rfe_keywords}")
-                    upstream_prs = self.pr_analyzer.search_relevant_prs(
-                        upstream_name,
-                        rfe_keywords,
-                        max_results=max_prs
-                    )
-                    self._log(f"  Found {len(upstream_prs)} relevant upstream PRs")
+                    # Search upstream PRs (if keywords provided)
+                    if rfe_keywords:
+                        self._log(f"  Searching upstream PRs with keywords: {rfe_keywords}")
+                        upstream_prs = self.pr_analyzer.search_relevant_prs(
+                            upstream_name,
+                            rfe_keywords,
+                            max_results=max_prs
+                        )
+                        self._log(f"  Found {len(upstream_prs)} relevant upstream PRs")
 
-                    # Analyze top upstream PRs
-                    upstream_insights = []
-                    for i, pr in enumerate(upstream_prs[:deep_dive_prs]):
-                        self._log(f"    Analyzing upstream PR #{pr['number']}: {pr['title']}")
-                        pr_details = self.pr_analyzer.analyze_pr_details(upstream_name, pr['number'])
+                        # Analyze top upstream PRs
+                        upstream_insights = []
+                        for i, pr in enumerate(upstream_prs[:deep_dive_prs]):
+                            self._log(f"    Analyzing upstream PR #{pr['number']}: {pr['title']}")
+                            pr_details = self.pr_analyzer.analyze_pr_details(upstream_name, pr['number'])
 
-                        if pr_details:
-                            insights = self.pr_analyzer.extract_design_insights(pr_details)
-                            effort = self.pr_analyzer.analyze_pr_effort(pr_details)
+                            if pr_details:
+                                insights = self.pr_analyzer.extract_design_insights(pr_details)
+                                effort = self.pr_analyzer.analyze_pr_effort(pr_details)
 
-                            upstream_insights.append({
-                                "pr": pr,
-                                "details": pr_details,
-                                "insights": insights,
-                                "effort": effort
-                            })
+                                upstream_insights.append({
+                                    "pr": pr,
+                                    "details": pr_details,
+                                    "insights": insights,
+                                    "effort": effort
+                                })
 
-                    context["upstream_pr_insights"] = upstream_insights
+                        context["upstream_pr_insights"] = upstream_insights
 
-                # Search upstream ADRs
-                self._log("  Searching upstream ADRs...")
-                upstream_adrs = self.pr_analyzer.search_adrs(upstream_name)
-                context["upstream_adrs"] = upstream_adrs
-                if upstream_adrs:
-                    self._log(f"  Found {len(upstream_adrs)} upstream ADRs")
+                    # Search upstream ADRs
+                    self._log("  Searching upstream ADRs...")
+                    upstream_adrs = self.pr_analyzer.search_adrs(upstream_name)
+                    context["upstream_adrs"] = upstream_adrs
+                    if upstream_adrs:
+                        self._log(f"  Found {len(upstream_adrs)} upstream ADRs")
 
-                self._log("  Upstream analysis complete!")
+                    self._log("  Upstream analysis complete!")
+                except Exception as e:
+                    self._log(f"Warning: Upstream analysis failed: {e}")
+                    # Graceful degradation - continue without upstream context
+                    context["upstream_structure"] = None
             else:
                 self._log("Step 5.5: Skipping upstream analysis (user declined or not requested)")
+        else:
+            self._log("No upstream repository found or invalid upstream data")
 
         # Step 6: Synthesize comprehensive context
         self._log("Step 6: Synthesizing comprehensive context...")
@@ -273,7 +348,10 @@ class ComponentContextGatherer:
             upstream_pr_insights=context.get("upstream_pr_insights"),
             upstream_adrs=context.get("upstream_adrs"),
             is_operator=context.get("is_operator", False),
-            operands=context.get("operands", [])
+            operands=context.get("operands", []),
+            rfe_related_files=context.get("rfe_related_files"),  # Phase 2
+            bug_patterns=context.get("bug_patterns"),            # Phase 2
+            dependencies=context.get("dependencies")             # Phase 2
         )
         context["markdown"] = markdown
 
